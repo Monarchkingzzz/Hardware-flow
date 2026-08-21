@@ -35,16 +35,35 @@ function fmt(n) {
   const v = Math.round(Number(n) || 0);
   return "KSh " + v.toLocaleString("en-US");
 }
+
 function todayISO(offsetDays = 0) {
   const d = new Date();
   d.setDate(d.getDate() + offsetDays);
-  return d.toISOString().slice(0, 10);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
+
+function isSameDay(date1, date2 = todayISO(0)) {
+  if (!date1 || !date2) return false;
+  return String(date1).slice(0, 10) === String(date2).slice(0, 10);
+}
+
+function isWithinRange(dateStr, startDate, endDate) {
+  if (!dateStr) return false;
+  const d = String(dateStr).slice(0, 10);
+  if (startDate && d < startDate) return false;
+  if (endDate && d > endDate) return false;
+  return true;
+}
+
 function niceDate(iso) {
   if (!iso) return "—";
   const d = new Date(iso.includes("T") ? iso : iso + "T00:00:00");
   return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
 }
+
 function uid(prefix) {
   return prefix + "-" + Math.random().toString(36).slice(2, 8).toUpperCase();
 }
@@ -528,14 +547,41 @@ function priceFor(product, tier) {
 
 /* ================= DASHBOARD ================= */
 function Dashboard({ db, role, notify }) {
-  const today = todayISO(0);
-  const salesToday = db.sales.filter(s => s.date === today);
-  const revenueToday = salesToday.reduce((a, s) => a + s.total, 0);
-  const profitToday = salesToday.reduce((a, s) => a + s.profit, 0);
-  const expensesToday = db.expenses.filter(e => e.date === today).reduce((a, e) => a + e.amount, 0);
-  const net = profitToday - expensesToday;
+  const [period, setPeriod] = useState("today"); // "today" | "week" | "month" | "all"
+  const [bestSellerSort, setBestSellerSort] = useState("revenue"); // "revenue" | "profit" | "qty"
 
-  const debtsCollectedToday = db.customers.flatMap(c => (c.payments || []).filter(p => p.date === today)).reduce((a, p) => a + p.amount, 0);
+  const today = todayISO(0);
+  const startOfWeek = todayISO(-7);
+  const startOfMonth = today.slice(0, 8) + "01";
+
+  // Filter transactions based on selected period
+  const filteredSales = useMemo(() => {
+    if (period === "today") return db.sales.filter(s => isSameDay(s.date, today));
+    if (period === "week") return db.sales.filter(s => isWithinRange(s.date, startOfWeek, today));
+    if (period === "month") return db.sales.filter(s => isWithinRange(s.date, startOfMonth, today));
+    return db.sales;
+  }, [db.sales, period, today, startOfWeek, startOfMonth]);
+
+  const filteredExpenses = useMemo(() => {
+    if (period === "today") return db.expenses.filter(e => isSameDay(e.date, today));
+    if (period === "week") return db.expenses.filter(e => isWithinRange(e.date, startOfWeek, today));
+    if (period === "month") return db.expenses.filter(e => isWithinRange(e.date, startOfMonth, today));
+    return db.expenses;
+  }, [db.expenses, period, today, startOfWeek, startOfMonth]);
+
+  const debtsCollected = useMemo(() => {
+    const allPayments = db.customers.flatMap(c => c.payments || []);
+    if (period === "today") return allPayments.filter(p => isSameDay(p.date, today));
+    if (period === "week") return allPayments.filter(p => isWithinRange(p.date, startOfWeek, today));
+    if (period === "month") return allPayments.filter(p => isWithinRange(p.date, startOfMonth, today));
+    return allPayments;
+  }, [db.customers, period, today, startOfWeek, startOfMonth]);
+
+  const revenuePeriod = filteredSales.reduce((a, s) => a + s.total, 0);
+  const profitPeriod = filteredSales.reduce((a, s) => a + s.profit, 0);
+  const expensesPeriod = filteredExpenses.reduce((a, e) => a + e.amount, 0);
+  const net = profitPeriod - expensesPeriod;
+  const debtsCollectedTotal = debtsCollected.reduce((a, p) => a + p.amount, 0);
 
   const custBalances = db.customers.map(c => ({ ...c, balance: customerBalance(db, c.id) }));
   const totalDebt = custBalances.reduce((a, c) => a + c.balance, 0);
@@ -548,11 +594,9 @@ function Dashboard({ db, role, notify }) {
   const lowStock = db.products.filter(p => p.stock <= p.minStock);
   const slowMoving = db.products.filter(p => !db.sales.some(s => s.items.some(i => i.productId === p.id) && s.date >= todayISO(-14)));
 
-  const [bestSellerSort, setBestSellerSort] = useState("revenue"); // "revenue" | "profit" | "qty"
-
   const bestSellers = useMemo(() => {
     const counts = {};
-    db.sales.forEach(s => {
+    filteredSales.forEach(s => {
       s.items.forEach(it => {
         const p = db.products.find(prod => prod.id === it.productId);
         if (!p) return;
@@ -565,7 +609,7 @@ function Dashboard({ db, role, notify }) {
       });
     });
     return Object.values(counts);
-  }, [db.sales, db.products]);
+  }, [filteredSales, db.products]);
 
   const sortedBestSellers = useMemo(() => {
     return [...bestSellers].sort((a, b) => {
@@ -575,32 +619,64 @@ function Dashboard({ db, role, notify }) {
     });
   }, [bestSellers, bestSellerSort]);
 
+  // Dynamic titles and subtitles based on active period
+  let periodTitle = "Today's overview";
+  let periodSubtitle = niceDate(today);
+  let salesLabel = "Sales Today";
+  let profitLabel = "Gross Profit Today";
+  let expLabel = "Expenses Today";
   let netLabel = "Net Income Today";
+  let debtsLabel = "Debts Collected Today";
+
+  if (period === "week") {
+    periodTitle = "Last 7 Days Overview";
+    periodSubtitle = `${niceDate(startOfWeek)} — ${niceDate(today)}`;
+    salesLabel = "Sales (7 Days)";
+    profitLabel = "Gross Profit (7 Days)";
+    expLabel = "Expenses (7 Days)";
+    netLabel = "Net Income (7 Days)";
+    debtsLabel = "Debts Collected (7 Days)";
+  } else if (period === "month") {
+    periodTitle = "This Month's Overview";
+    periodSubtitle = `${niceDate(startOfMonth)} — ${niceDate(today)}`;
+    salesLabel = "Sales (This Month)";
+    profitLabel = "Gross Profit (This Month)";
+    expLabel = "Expenses (This Month)";
+    netLabel = "Net Income (This Month)";
+    debtsLabel = "Debts Collected (This Month)";
+  } else if (period === "all") {
+    periodTitle = "All-Time Financial Overview";
+    periodSubtitle = "Cumulative business lifetime";
+    salesLabel = "Total Revenue";
+    profitLabel = "Total Gross Profit";
+    expLabel = "Total Expenses";
+    netLabel = "Total Net Profit";
+    debtsLabel = "Total Debts Collected";
+  }
+
   let netTone = "green";
   let netValue = "+" + fmt(net);
   let netColor = "var(--green)";
   let netSub = "Profit margin positive";
 
-  if (salesToday.length === 0 && expensesToday === 0) {
-    netLabel = "Net Income Today";
+  if (filteredSales.length === 0 && expensesPeriod === 0) {
     netTone = "ink";
     netValue = fmt(0);
     netColor = "var(--ink-soft)";
-    netSub = "Break-even today";
+    netSub = "Break-even for period";
   } else if (net < 0) {
-    netLabel = "Net Income Today";
     netTone = "red";
     netValue = "-" + fmt(Math.abs(net));
     netColor = "var(--red)";
-    netSub = "Expenses exceed daily margin";
+    netSub = "Expenses exceed margin";
   }
 
   const kpis = [
-    { label: "Sales Today", value: fmt(revenueToday), tone: "ink", icon: ReceiptIcon, rawVal: revenueToday },
-    { label: "Gross Profit", value: fmt(profitToday), tone: "green", ownerOnly: true, icon: TrendingUp, valColor: "var(--green)", rawVal: profitToday },
-    { label: "Expenses Today", value: fmt(expensesToday), tone: "amber", ownerOnly: true, icon: TrendingDown, valColor: "var(--amber)", rawVal: expensesToday },
+    { label: salesLabel, value: fmt(revenuePeriod), tone: "ink", icon: ReceiptIcon, rawVal: revenuePeriod },
+    { label: profitLabel, value: fmt(profitPeriod), tone: "green", ownerOnly: true, icon: TrendingUp, valColor: "var(--green)", rawVal: profitPeriod },
+    { label: expLabel, value: fmt(expensesPeriod), tone: "amber", ownerOnly: true, icon: TrendingDown, valColor: "var(--amber)", rawVal: expensesPeriod },
     { label: netLabel, value: netValue, tone: netTone, ownerOnly: true, icon: BarChart3, valColor: netColor, rawVal: net, sub: netSub },
-    { label: "Debts Collected Today", value: fmt(debtsCollectedToday), tone: "green", icon: Coins, valColor: "var(--green)", rawVal: debtsCollectedToday },
+    { label: debtsLabel, value: fmt(debtsCollectedTotal), tone: "green", icon: Coins, valColor: "var(--green)", rawVal: debtsCollectedTotal },
     { label: "Customer Debts", value: fmt(totalDebt), tone: "steel", icon: Users, rawVal: totalDebt },
     { label: "Supplier Balances", value: fmt(totalSupplierBal), tone: "steel", ownerOnly: true, icon: Building2, rawVal: totalSupplierBal },
     { label: "Stock Value", value: fmt(stockValueCorrect), tone: "ink", ownerOnly: true, icon: Package, rawVal: stockValueCorrect },
@@ -626,10 +702,44 @@ function Dashboard({ db, role, notify }) {
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 18 }}>
+      {/* Dashboard Top Header & Period Filter */}
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 18 }}>
         <div>
-          <div className="disp" style={{ fontSize: 30, fontWeight: 700 }}>Today's overview</div>
-          <div style={{ color: "var(--ink-soft)", fontSize: 13 }}>{niceDate(today)}</div>
+          <div className="disp" style={{ fontSize: 28, fontWeight: 700 }}>{periodTitle}</div>
+          <div style={{ color: "var(--ink-soft)", fontSize: 13, marginTop: 2 }}>{periodSubtitle}</div>
+        </div>
+
+        {/* Period Selector Toggle */}
+        <div style={{ display: "flex", background: "var(--surface-hover)", padding: 3, borderRadius: 10, border: "1px solid var(--line)" }}>
+          {[
+            { key: "today", label: "Today" },
+            { key: "week", label: "7 Days" },
+            { key: "month", label: "This Month" },
+            { key: "all", label: "All Time" },
+          ].map(p => {
+            const isActive = period === p.key;
+            return (
+              <button
+                key={p.key}
+                type="button"
+                onClick={() => setPeriod(p.key)}
+                style={{
+                  padding: "5px 12px",
+                  fontSize: 12,
+                  fontWeight: isActive ? 700 : 500,
+                  borderRadius: 7,
+                  border: "none",
+                  cursor: "pointer",
+                  background: isActive ? "var(--rust)" : "transparent",
+                  color: isActive ? "#FFFFFF" : "var(--ink)",
+                  boxShadow: isActive ? "0 2px 6px rgba(193,80,47,0.3)" : "none",
+                  transition: "all .15s ease",
+                }}
+              >
+                {p.label}
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -2199,6 +2309,7 @@ function Field({ label, help, children }) {
 function Receiving({ db, setDb, notify, currentUser }) {
   const [supplierId, setSupplierId] = useState(db.suppliers[0]?.id || "");
   const [invoiceRef, setInvoiceRef] = useState("");
+  const [paymentMode, setPaymentMode] = useState("credit"); // "credit" | "cash" | "mpesa"
   const [lines, setLines] = useState([{ productId: "", qty: "", buyPrice: "" }]);
   const [done, setDone] = useState(false);
 
@@ -2218,6 +2329,8 @@ function Receiving({ db, setDb, notify, currentUser }) {
     }
     const supp = db.suppliers.find(s => s.id === supplierId);
     const operator = currentUser?.name || "Mary";
+    const today = todayISO(0);
+    const timeStr = new Date().toTimeString().slice(0, 5);
 
     setDb(prev => {
       const products = prev.products.map(p => {
@@ -2230,20 +2343,53 @@ function Receiving({ db, setDb, notify, currentUser }) {
           ...p,
           stock: p.stock + baseQty,
           buyPrice: newBuy,
-          history: [...p.history, { date: todayISO(0), action: "Received", qty: baseQty, user: operator }],
+          history: [...p.history, { date: today, action: "Received", qty: baseQty, user: operator }],
         };
       });
+
+      // If paid directly (cash or mpesa), log as an immediate stock purchase expense
+      let updatedExpenses = prev.expenses;
+      let updatedSuppliers = prev.suppliers;
+
+      if (paymentMode === "cash" || paymentMode === "mpesa") {
+        const expEntry = {
+          id: uid("EXP"),
+          date: today,
+          category: "Stock Purchase",
+          amount: total,
+          description: `Stock delivery from ${supp?.name || "Supplier"} (${invoiceRef || "Direct Purchase"})`,
+          payment: paymentMode,
+          supplierId: supp?.id || null,
+        };
+        updatedExpenses = [expEntry, ...prev.expenses];
+
+        // Also record payment on supplier ledger so outstanding balance doesn't accumulate
+        if (supp) {
+          updatedSuppliers = prev.suppliers.map(s => s.id === supp.id ? {
+            ...s,
+            payments: [...(s.payments || []), { date: today, amount: total }]
+          } : s);
+        }
+      }
+
       const auditEntry = {
         id: uid("LOG"),
-        time: todayISO(0) + " " + new Date().toTimeString().slice(0, 5),
+        time: `${today} ${timeStr}`,
         user: operator,
         role: "Storekeeper",
         category: "Stock Received",
-        action: `Received stock delivery from ${supp?.name || "Supplier"}`,
+        action: `Received stock delivery from ${supp?.name || "Supplier"} (${paymentMode === "credit" ? "On Credit" : "Paid " + paymentMode.toUpperCase()})`,
         detail: `${fmt(total)} (${invoiceRef || "No Invoice Ref"})`,
         target: supp?.name || "Supplier",
       };
-      return { ...prev, products, auditLog: [auditEntry, ...prev.auditLog] };
+
+      return {
+        ...prev,
+        products,
+        expenses: updatedExpenses,
+        suppliers: updatedSuppliers,
+        auditLog: [auditEntry, ...prev.auditLog]
+      };
     });
 
     notify("success", "Delivery Received", `Stock updated from ${supp?.name || "Supplier"} · Value: ${fmt(total)}`);
@@ -2256,7 +2402,7 @@ function Receiving({ db, setDb, notify, currentUser }) {
         <CheckCircle2 size={32} color="var(--green)" style={{ margin: "0 auto" }} />
         <div className="disp" style={{ fontSize: 22, fontWeight: 700, marginTop: 10 }}>Stock Delivery Received</div>
         <div style={{ color: "var(--ink-soft)", fontSize: 13, marginTop: 4 }}>
-          Inventory stock levels, purchase histories, and supplier account have been updated.
+          Inventory stock levels, purchase histories, and supplier account have been updated in real-time.
         </div>
         <button
           className="hf-btn hf-btn-primary"
@@ -2283,6 +2429,39 @@ function Receiving({ db, setDb, notify, currentUser }) {
             <input className="hf-input" placeholder="e.g. INV-1045" value={invoiceRef} onChange={e => setInvoiceRef(e.target.value)} />
           </Field>
         </FieldGrid>
+
+        {/* Payment Terms for Delivery */}
+        <div style={{ marginTop: 12, marginBottom: 6 }}>
+          <div className="hf-kpi-label" style={{ marginBottom: 4 }}>Payment for Delivery</div>
+          <div style={{ display: "flex", gap: 6 }}>
+            {[
+              { key: "credit", label: "On Credit (Supplier Account)" },
+              { key: "cash", label: "Paid Cash on Delivery" },
+              { key: "mpesa", label: "Paid via M-Pesa" },
+            ].map(m => {
+              const isSelected = paymentMode === m.key;
+              return (
+                <button
+                  key={m.key}
+                  type="button"
+                  onClick={() => setPaymentMode(m.key)}
+                  className="hf-btn"
+                  style={{
+                    flex: 1,
+                    justifyContent: "center",
+                    background: isSelected ? "var(--rust)" : "var(--surface-hover)",
+                    color: isSelected ? "#FFFFFF" : "var(--ink)",
+                    border: isSelected ? "1.5px solid var(--rust-dark)" : "1.5px solid var(--line)",
+                    fontWeight: isSelected ? 700 : 500,
+                    fontSize: 12,
+                  }}
+                >
+                  {isSelected ? "✓ " : ""}{m.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
 
         <div className="hf-kpi-label" style={{ margin: "16px 0 6px" }}>Items Received</div>
         {lines.map((l, i) => {
@@ -2798,9 +2977,9 @@ function NewQuoteModal({ db, setDb, onClose, notify }) {
 function Cashbook({ db, setDb, notify, currentUser }) {
   const [showExpense, setShowExpense] = useState(false);
   const today = todayISO(0);
-  const inflows = db.sales.filter(s => s.date === today && s.payment !== "credit");
-  const paymentsIn = [...db.customers.flatMap(c => (c.payments||[]).filter(p=>p.date===today).map(p=>({...p, who:c.name}))) ];
-  const outflows = db.expenses.filter(e => e.date === today);
+  const inflows = db.sales.filter(s => isSameDay(s.date, today) && s.payment !== "credit");
+  const paymentsIn = [...db.customers.flatMap(c => (c.payments||[]).filter(p=>isSameDay(p.date, today)).map(p=>({...p, who:c.name}))) ];
+  const outflows = db.expenses.filter(e => isSameDay(e.date, today));
 
   const totalIn = inflows.reduce((a, s) => a + s.total, 0) + paymentsIn.reduce((a, p) => a + p.amount, 0);
   const totalOut = outflows.reduce((a, e) => a + e.amount, 0);
