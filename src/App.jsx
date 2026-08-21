@@ -1193,10 +1193,19 @@ function POS({ db, setDb, role, notify, currentUser }) {
     : [];
 
   function addToCart(p) {
+    if ((p.stock || 0) <= 0) {
+      notify("error", "Product Out of Stock", `Cannot add "${p.name}". Current available inventory is 0 ${p.baseUnit}.`);
+      return;
+    }
     setCart(c => {
       const existing = c.find(i => i.productId === p.id);
       if (existing) {
-        const newQty = (Number(existing.qty) || 0) + 1;
+        const currentQty = Number(existing.qty) || 0;
+        if (currentQty >= (p.stock || 0)) {
+          notify("warning", "Stock Limit Reached", `Cannot add more. Only ${p.stock} ${p.baseUnit} of "${p.name}" available in stock.`);
+          return c;
+        }
+        const newQty = currentQty + 1;
         return c.map(i => i.productId === p.id ? { ...i, qty: newQty, qtyInput: String(newQty) } : i);
       }
       return [...c, { productId: p.id, qty: 1, qtyInput: "1" }];
@@ -1217,19 +1226,31 @@ function POS({ db, setDb, role, notify, currentUser }) {
   }
 
   function handleQtyBlur(id) {
+    const p = db.products.find(prod => prod.id === id);
     setCart(c => c.map(i => {
       if (i.productId !== id) return i;
-      if (!i.qtyInput || Number(i.qtyInput) <= 0) {
-        return { ...i, qty: 1, qtyInput: "1" };
+      let num = parseInt(i.qtyInput, 10);
+      if (isNaN(num) || num <= 0) {
+        num = 1;
       }
-      return i;
+      if (p && num > (p.stock || 0)) {
+        notify("warning", "Quantity Exceeds Stock", `Adjusted quantity of "${p.name}" to max available stock (${p.stock} ${p.baseUnit}).`);
+        num = Math.max(1, p.stock || 0);
+      }
+      return { ...i, qty: num, qtyInput: String(num) };
     }));
   }
 
   function incrementQty(id) {
+    const p = db.products.find(prod => prod.id === id);
     setCart(c => c.map(i => {
       if (i.productId !== id) return i;
-      const newQty = (Number(i.qty) || 0) + 1;
+      const current = Number(i.qty) || 0;
+      if (p && current >= (p.stock || 0)) {
+        notify("warning", "Stock Limit Reached", `Only ${p.stock} ${p.baseUnit} of "${p.name}" available.`);
+        return i;
+      }
+      const newQty = current + 1;
       return { ...i, qty: newQty, qtyInput: String(newQty) };
     }));
   }
@@ -1252,11 +1273,13 @@ function POS({ db, setDb, role, notify, currentUser }) {
     const p = db.products.find(pp => pp.id === i.productId);
     const unitPrice = priceFor(p, tier);
     const actualQty = Number(i.qty) || 0;
-    return { ...i, product: p, unitPrice, lineTotal: unitPrice * actualQty };
+    const isExceeded = actualQty > (p?.stock || 0) || actualQty <= 0;
+    return { ...i, product: p, unitPrice, lineTotal: unitPrice * actualQty, isExceeded };
   });
 
   const total = lines.reduce((a, l) => a + l.lineTotal, 0);
   const custAvailable = customerId ? (db.customers.find(c => c.id === customerId)?.creditLimit || 0) - customerBalance(db, customerId) : null;
+  const hasStockError = lines.some(l => l.isExceeded);
 
   function triggerManualSync() {
     if (isSyncingOffline) return;
@@ -1275,6 +1298,12 @@ function POS({ db, setDb, role, notify, currentUser }) {
     const hasZero = lines.some(l => (Number(l.qty) || 0) <= 0);
     if (hasZero) {
       notify("error", "Invalid Quantity", "Please enter a valid quantity for all items in the cart.");
+      return;
+    }
+    const overStockItems = lines.filter(l => (Number(l.qty) || 0) > (l.product?.stock || 0));
+    if (overStockItems.length > 0) {
+      const summary = overStockItems.map(l => `"${l.product?.name || 'Item'}" (Requested: ${l.qty}, In Stock: ${l.product?.stock || 0})`).join("; ");
+      notify("error", "Insufficient Stock — Checkout Blocked", `Cannot complete sale. The following item(s) exceed available inventory: ${summary}. Please reduce quantity or receive stock.`);
       return;
     }
     if (payment === "credit" && !customerId) {
@@ -1500,25 +1529,44 @@ function POS({ db, setDb, role, notify, currentUser }) {
             </div>
             {results.length > 0 && (
               <div className="hf-card" style={{ marginBottom: 14, overflow: "hidden", maxHeight: 280, overflowY: "auto" }}>
-                {results.map(p => (
-                  <div
-                    key={p.id}
-                    onClick={() => addToCart(p)}
-                    style={{ padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", borderBottom: "1px solid var(--line)" }}
-                    onMouseEnter={e => e.currentTarget.style.background = "var(--surface-hover)"}
-                    onMouseLeave={e => e.currentTarget.style.background = "transparent"}
-                  >
-                    <div>
-                      <div style={{ fontWeight: 600, fontSize: 13.5 }}>{p.name}</div>
-                      <div style={{ fontSize: 12, color: "var(--ink-soft)" }}>
-                        Stock: {p.stock} {p.baseUnit} · Retail {fmt(p.sellPrice)}
-                        {p.contractorPrice ? ` · Contractor ${fmt(p.contractorPrice)}` : ""}
-                        {p.wholesalePrice ? ` · Wholesale ${fmt(p.wholesalePrice)}` : ""}
+                {results.map(p => {
+                  const isOutOfStock = (p.stock || 0) <= 0;
+                  return (
+                    <div
+                      key={p.id}
+                      onClick={() => !isOutOfStock && addToCart(p)}
+                      style={{
+                        padding: "10px 14px",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        cursor: isOutOfStock ? "not-allowed" : "pointer",
+                        borderBottom: "1px solid var(--line)",
+                        opacity: isOutOfStock ? 0.6 : 1,
+                        background: isOutOfStock ? "var(--surface-hover)" : "transparent",
+                      }}
+                      onMouseEnter={e => { if (!isOutOfStock) e.currentTarget.style.background = "var(--surface-hover)"; }}
+                      onMouseLeave={e => { if (!isOutOfStock) e.currentTarget.style.background = "transparent"; }}
+                    >
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: 13.5, display: "flex", alignItems: "center", gap: 6 }}>
+                          <span>{p.name}</span>
+                          {isOutOfStock && (
+                            <span style={{ fontSize: 10.5, background: "var(--red-tint)", color: "var(--red)", padding: "1px 6px", borderRadius: 4, fontWeight: 700 }}>
+                              OUT OF STOCK
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: 12, color: "var(--ink-soft)" }}>
+                          Available: <strong style={{ color: isOutOfStock ? "var(--red)" : "var(--ink)" }}>{p.stock} {p.baseUnit}</strong> · Retail {fmt(p.sellPrice)}
+                          {p.contractorPrice ? ` · Contractor ${fmt(p.contractorPrice)}` : ""}
+                          {p.wholesalePrice ? ` · Wholesale ${fmt(p.wholesalePrice)}` : ""}
+                        </div>
                       </div>
+                      {!isOutOfStock && <Plus size={16} color="var(--rust)" />}
                     </div>
-                    <Plus size={16} color="var(--rust)" />
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
 
@@ -1541,54 +1589,72 @@ function POS({ db, setDb, role, notify, currentUser }) {
                       </td>
                     </tr>
                   )}
-                  {lines.map(l => (
-                    <tr key={l.productId}>
-                      <td>
-                        <div style={{ fontWeight: 600 }}>{l.product.name}</div>
-                        <div style={{ fontSize: 11, color: "var(--ink-soft)" }}>{l.product.baseUnit}</div>
-                      </td>
-                      <td>
-                        <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                  {lines.map(l => {
+                    const stockCount = l.product?.stock || 0;
+                    const isOver = (Number(l.qty) || 0) > stockCount;
+                    const isZero = (Number(l.qty) || 0) <= 0;
+                    return (
+                      <tr key={l.productId} style={{ background: isOver ? "var(--red-tint)" : "transparent" }}>
+                        <td>
+                          <div style={{ fontWeight: 600, color: isOver ? "var(--red)" : "inherit" }}>{l.product?.name}</div>
+                          <div style={{ fontSize: 11, color: isOver ? "var(--red)" : "var(--ink-soft)", display: "flex", gap: 6, alignItems: "center", marginTop: 2 }}>
+                            <span>In Stock: <strong>{stockCount} {l.product?.baseUnit}</strong></span>
+                            {isOver && <span style={{ fontWeight: 700, color: "var(--red)" }}>⚠ Exceeds available stock!</span>}
+                          </div>
+                        </td>
+                        <td>
+                          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                            <button
+                              className="hf-btn hf-btn-ghost"
+                              style={{ padding: "3px 7px" }}
+                              onClick={() => decrementQty(l.productId)}
+                              type="button"
+                            >
+                              <Minus size={12} />
+                            </button>
+                            <input
+                              className="hf-input mono"
+                              style={{
+                                width: 62,
+                                textAlign: "center",
+                                padding: "4px 4px",
+                                fontWeight: 700,
+                                border: isOver || isZero ? "1.5px solid var(--red)" : "1.5px solid var(--line)",
+                                background: isOver || isZero ? "#FFF0F0" : "inherit",
+                                color: isOver || isZero ? "var(--red)" : "inherit",
+                              }}
+                              type="number"
+                              min="1"
+                              max={stockCount}
+                              value={l.qtyInput !== undefined ? l.qtyInput : l.qty}
+                              onChange={e => handleQtyChange(l.productId, e.target.value)}
+                              onBlur={() => handleQtyBlur(l.productId)}
+                            />
+                            <button
+                              className="hf-btn hf-btn-ghost"
+                              style={{ padding: "3px 7px" }}
+                              onClick={() => incrementQty(l.productId)}
+                              disabled={Number(l.qty) >= stockCount}
+                              type="button"
+                            >
+                              <Plus size={12} />
+                            </button>
+                          </div>
+                        </td>
+                        <td className="mono">{fmt(l.unitPrice)}</td>
+                        <td className="mono" style={{ fontWeight: 700, color: isOver ? "var(--red)" : "var(--ink)" }}>{fmt(l.lineTotal)}</td>
+                        <td>
                           <button
-                            className="hf-btn hf-btn-ghost"
-                            style={{ padding: "3px 7px" }}
-                            onClick={() => decrementQty(l.productId)}
-                            type="button"
+                            onClick={() => removeItem(l.productId)}
+                            style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}
+                            title="Remove item from cart"
                           >
-                            <Minus size={12} />
+                            <Trash2 size={15} color="var(--red)" />
                           </button>
-                          <input
-                            className="hf-input mono"
-                            style={{ width: 62, textAlign: "center", padding: "4px 4px", fontWeight: 700 }}
-                            type="number"
-                            min="1"
-                            value={l.qtyInput !== undefined ? l.qtyInput : l.qty}
-                            onChange={e => handleQtyChange(l.productId, e.target.value)}
-                            onBlur={() => handleQtyBlur(l.productId)}
-                          />
-                          <button
-                            className="hf-btn hf-btn-ghost"
-                            style={{ padding: "3px 7px" }}
-                            onClick={() => incrementQty(l.productId)}
-                            type="button"
-                          >
-                            <Plus size={12} />
-                          </button>
-                        </div>
-                      </td>
-                      <td className="mono">{fmt(l.unitPrice)}</td>
-                      <td className="mono" style={{ fontWeight: 700, color: "var(--ink)" }}>{fmt(l.lineTotal)}</td>
-                      <td>
-                        <button
-                          onClick={() => removeItem(l.productId)}
-                          style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}
-                          title="Remove item from cart"
-                        >
-                          <Trash2 size={15} color="var(--red)" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -1701,12 +1767,20 @@ function POS({ db, setDb, role, notify, currentUser }) {
             </div>
 
             <button
-              className="hf-btn hf-btn-primary"
+              className={`hf-btn ${hasStockError ? "hf-btn-danger" : "hf-btn-primary"}`}
               style={{ width: "100%", justifyContent: "center", padding: "12px", fontSize: 14 }}
               onClick={completeSale}
-              disabled={lines.length === 0}
+              disabled={lines.length === 0 || hasStockError}
             >
-              <Check size={16} /> Complete sale
+              {hasStockError ? (
+                <>
+                  <AlertTriangle size={16} /> Stock Exceeded — Adjust Quantity
+                </>
+              ) : (
+                <>
+                  <Check size={16} /> Complete sale
+                </>
+              )}
             </button>
           </div>
         </div>
@@ -2920,11 +2994,21 @@ function Quotations({ db, setDb, notify, currentUser }) {
       const prod = db.products.find(p => p.id === i.productId);
       return {
         productId: i.productId,
-        qty: i.qty,
+        qty: Number(i.qty) || 0,
         unitPrice: i.unitPrice,
-        unitCost: prod ? prod.buyPrice / (prod.conversionFactor || 1) : 0
+        unitCost: prod ? prod.buyPrice / (prod.conversionFactor || 1) : 0,
+        product: prod,
       };
     });
+
+    // Check inventory availability before converting
+    const overStockItems = items.filter(i => (Number(i.qty) || 0) > (i.product?.stock || 0));
+    if (overStockItems.length > 0) {
+      const summary = overStockItems.map(i => `"${i.product?.name || 'Item'}" (Requested: ${i.qty}, In Stock: ${i.product?.stock || 0})`).join("; ");
+      notify("error", "Conversion Blocked — Insufficient Stock", `Cannot convert quotation to sale. Requested items exceed inventory: ${summary}. Please receive stock first.`);
+      return;
+    }
+
     const total = items.reduce((a, i) => a + i.unitPrice * i.qty, 0);
     const cost = items.reduce((a, i) => a + i.unitCost * i.qty, 0);
     
