@@ -281,8 +281,35 @@ function useDB() {
           if (getIsSyncing()) return;
           const cloudDb = await pullDatabaseFromSupabase();
           if (cloudDb && cloudDb.products && cloudDb.products.length > 0) {
-            setDb(cloudDb);
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(cloudDb));
+            setDb(prevLocal => {
+              if (!prevLocal) return cloudDb;
+
+              // Non-destructive merge: preserve any locally made sales/expenses/logs
+              const cloudSaleInvoices = new Set((cloudDb.sales || []).map(s => s.invoiceNo || s.id));
+              const pendingLocalSales = (prevLocal.sales || []).filter(s => !cloudSaleInvoices.has(s.invoiceNo) && !cloudSaleInvoices.has(s.id));
+
+              const cloudExpIds = new Set((cloudDb.expenses || []).map(e => e.id));
+              const pendingLocalExpenses = (prevLocal.expenses || []).filter(e => !cloudExpIds.has(e.id));
+
+              const cloudLogIds = new Set((cloudDb.auditLog || []).map(l => l.id));
+              const pendingLocalLogs = (prevLocal.auditLog || []).filter(l => !cloudLogIds.has(l.id));
+
+              const merged = {
+                ...cloudDb,
+                sales: [...pendingLocalSales, ...(cloudDb.sales || [])],
+                expenses: [...pendingLocalExpenses, ...(cloudDb.expenses || [])],
+                auditLog: [...pendingLocalLogs, ...(cloudDb.auditLog || [])],
+                invoiceSeq: Math.max(cloudDb.invoiceSeq || 0, prevLocal.invoiceSeq || 0),
+                quoteSeq: Math.max(cloudDb.quoteSeq || 0, prevLocal.quoteSeq || 0),
+              };
+
+              try {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+              } catch (e) {
+                console.error(e);
+              }
+              return merged;
+            });
           }
         } catch (err) {
           console.warn("[HardwareFlow] Realtime sync refresh notice:", err);
@@ -1164,7 +1191,14 @@ function POS({ db, setDb, role, notify, currentUser }) {
 
     const now = new Date();
     const timeStr = now.toTimeString().slice(0, 5);
-    const invoiceNo = `INV-2026-${String(db.invoiceSeq).padStart(5, "0")}`;
+    const existingInvSeqs = (db.sales || []).map(s => {
+      const m = String(s.invoiceNo || "").match(/\d+$/);
+      return m ? parseInt(m[0], 10) : 0;
+    });
+    const nextSeqNum = Math.max(457, ...existingInvSeqs, Number(db.invoiceSeq) || 0) + 1;
+    const invoiceNo = `INV-2026-${String(nextSeqNum).padStart(5, "0")}`;
+    const saleDate = todayISO(0);
+
     const saleItems = lines.map(l => ({
       productId: l.product.id,
       qty: Number(l.qty),
@@ -1178,7 +1212,7 @@ function POS({ db, setDb, role, notify, currentUser }) {
     const sale = {
       id: uid("INV"),
       invoiceNo,
-      date: todayISO(0),
+      date: saleDate,
       time: timeStr,
       items: saleItems,
       total,
@@ -1202,11 +1236,18 @@ function POS({ db, setDb, role, notify, currentUser }) {
           history: [...p.history, { date: sale.date, action: "Sale", qty: -line.qty, user: sale.employee }],
         };
       });
+
+      const allPrevInvSeqs = (prev.sales || []).map(s => {
+        const m = String(s.invoiceNo || "").match(/\d+$/);
+        return m ? parseInt(m[0], 10) : 0;
+      });
+      const resolvedSeq = Math.max(nextSeqNum, ...allPrevInvSeqs) + 1;
+
       return {
         ...prev,
         products,
         sales: [sale, ...prev.sales],
-        invoiceSeq: prev.invoiceSeq + 1,
+        invoiceSeq: resolvedSeq,
         auditLog: [
           {
             id: uid("LOG"),
@@ -2788,7 +2829,13 @@ function Quotations({ db, setDb, notify, currentUser }) {
     });
     const total = items.reduce((a, i) => a + i.unitPrice * i.qty, 0);
     const cost = items.reduce((a, i) => a + i.unitCost * i.qty, 0);
-    const invoiceNo = `INV-2026-${String(db.invoiceSeq).padStart(5, "0")}`;
+    
+    const existingInvSeqs = (db.sales || []).map(s => {
+      const m = String(s.invoiceNo || "").match(/\d+$/);
+      return m ? parseInt(m[0], 10) : 0;
+    });
+    const nextSeqNum = Math.max(457, ...existingInvSeqs, Number(db.invoiceSeq) || 0) + 1;
+    const invoiceNo = `INV-2026-${String(nextSeqNum).padStart(5, "0")}`;
     const employee = currentUser?.name || "Owner";
 
     const sale = {
@@ -2805,34 +2852,42 @@ function Quotations({ db, setDb, notify, currentUser }) {
       employee
     };
 
-    setDb(prev => ({
-      ...prev,
-      products: prev.products.map(p => {
-        const line = items.find(i => i.productId === p.id);
-        if (!line) return p;
-        return {
-          ...p,
-          stock: p.stock - line.qty,
-          history: [...p.history, { date: sale.date, action: "Sale", qty: -line.qty, user: employee }]
-        };
-      }),
-      sales: [sale, ...prev.sales],
-      invoiceSeq: prev.invoiceSeq + 1,
-      quotations: prev.quotations.map(x => x.id === q.id ? { ...x, status: "converted" } : x),
-      auditLog: [
-        {
-          id: uid("LOG"),
-          time: todayISO(0) + " " + new Date().toTimeString().slice(0, 5),
-          user: employee,
-          role: currentUser?.role || "Staff",
-          category: "Quotation",
-          action: `Converted quotation ${q.number} to sale`,
-          detail: invoiceNo,
-          target: q.number,
-        },
-        ...prev.auditLog
-      ],
-    }));
+    setDb(prev => {
+      const allPrevInvSeqs = (prev.sales || []).map(s => {
+        const m = String(s.invoiceNo || "").match(/\d+$/);
+        return m ? parseInt(m[0], 10) : 0;
+      });
+      const resolvedSeq = Math.max(nextSeqNum, ...allPrevInvSeqs) + 1;
+
+      return {
+        ...prev,
+        products: prev.products.map(p => {
+          const line = items.find(i => i.productId === p.id);
+          if (!line) return p;
+          return {
+            ...p,
+            stock: p.stock - line.qty,
+            history: [...p.history, { date: sale.date, action: "Sale", qty: -line.qty, user: employee }]
+          };
+        }),
+        sales: [sale, ...prev.sales],
+        invoiceSeq: resolvedSeq,
+        quotations: prev.quotations.map(x => x.id === q.id ? { ...x, status: "converted" } : x),
+        auditLog: [
+          {
+            id: uid("LOG"),
+            time: todayISO(0) + " " + new Date().toTimeString().slice(0, 5),
+            user: employee,
+            role: currentUser?.role || "Staff",
+            category: "Quotation",
+            action: `Converted quotation ${q.number} to sale`,
+            detail: invoiceNo,
+            target: q.number,
+          },
+          ...prev.auditLog
+        ],
+      };
+    });
 
     notify("success", "Quotation Converted", `${q.number} converted to sale invoice ${invoiceNo}.`);
     setViewing(null);
@@ -2937,8 +2992,29 @@ function NewQuoteModal({ db, setDb, onClose, notify }) {
       notify("warning", "Missing Items", "Please add valid products and quantities to the quotation.");
       return;
     }
-    const q = { id: uid("QT"), number: `QT-${db.quoteSeq}`, customerId: customerId || null, date: todayISO(0), status: "draft", items };
-    setDb(prev => ({ ...prev, quotations: [q, ...prev.quotations], quoteSeq: prev.quoteSeq + 1 }));
+
+    const existingQuoteSeqs = (db.quotations || []).map(q => {
+      const m = String(q.number || "").match(/\d+$/);
+      return m ? parseInt(m[0], 10) : 0;
+    });
+    const nextQuoteNum = Math.max(1044, ...existingQuoteSeqs, Number(db.quoteSeq) || 0) + 1;
+    const qNumber = `QT-${nextQuoteNum}`;
+
+    const q = { id: uid("QT"), number: qNumber, customerId: customerId || null, date: todayISO(0), status: "draft", items };
+    
+    setDb(prev => {
+      const allPrevSeqs = (prev.quotations || []).map(x => {
+        const m = String(x.number || "").match(/\d+$/);
+        return m ? parseInt(m[0], 10) : 0;
+      });
+      const resolvedSeq = Math.max(nextQuoteNum, ...allPrevSeqs) + 1;
+      return {
+        ...prev,
+        quotations: [q, ...prev.quotations],
+        quoteSeq: resolvedSeq,
+      };
+    });
+
     notify("success", "Quotation Saved", `Created quote ${q.number}.`);
     onClose();
   }

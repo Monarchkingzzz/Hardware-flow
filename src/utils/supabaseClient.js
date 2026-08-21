@@ -252,7 +252,7 @@ export async function pushDatabaseToSupabase(db) {
           customer_id: s.customerId || null,
           employee: s.employee || "Staff",
         })),
-        { onConflict: "id" }
+        { onConflict: "invoice_no" }
       );
       if (error) throw new Error(`Failed pushing Sales: ${error.message}`);
       results.sales = db.sales.length;
@@ -305,7 +305,7 @@ export async function pushDatabaseToSupabase(db) {
           status: q.status || "draft",
           items: q.items || [],
         })),
-        { onConflict: "id" }
+        { onConflict: "number" }
       );
       if (error) throw new Error(`Failed pushing Quotations: ${error.message}`);
       results.quotations = db.quotations.length;
@@ -492,8 +492,22 @@ export async function pullDatabaseFromSupabase() {
       detail: a.detail,
       target: a.target,
     })),
-    invoiceSeq: seqObj.invoiceSeq || 454,
-    quoteSeq: seqObj.quoteSeq || 1042,
+    invoiceSeq: Math.max(
+      458,
+      ...(salesRes.data || []).map(s => {
+        const m = String(s.invoice_no || "").match(/\d+$/);
+        return m ? parseInt(m[0], 10) + 1 : 0;
+      }),
+      Number(seqObj.invoiceSeq) || 458
+    ),
+    quoteSeq: Math.max(
+      1045,
+      ...(quotationsRes.data || []).map(q => {
+        const m = String(q.number || "").match(/\d+$/);
+        return m ? parseInt(m[0], 10) + 1 : 0;
+      }),
+      Number(seqObj.quoteSeq) || 1045
+    ),
     poSeq: seqObj.poSeq || 2046,
   };
 }
