@@ -199,11 +199,12 @@ export function exportReceiptPDF({ sale, db }) {
 /**
  * Export Best-Selling Products Analytics Report to PDF
  */
-export function exportBestSellersPDF({ bestSellers, totalRevenue, totalProfit }) {
+export function exportBestSellersPDF({ bestSellers, totalRevenue, totalProfit, sortBy = "revenue" }) {
   const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
   const totalUnits = (bestSellers || []).reduce((a, b) => a + b.qty, 0);
 
-  const subtitle = `Total Products Ranked: ${bestSellers.length} · Total Units Sold: ${totalUnits.toLocaleString()} · Generated: ${new Date().toLocaleDateString("en-GB")}`;
+  const sortLabel = sortBy === "profit" ? "Gross Profit Generated" : sortBy === "qty" ? "Total Units Sold (Volume)" : "Total Revenue (Financial Impact)";
+  const subtitle = `Ranked by: ${sortLabel} · Total Products: ${bestSellers.length} · Generated: ${new Date().toLocaleDateString("en-GB")}`;
   addPDFHeader(doc, "Best-Selling Products & Margin Analytics", subtitle);
 
   const startY = 42;
@@ -234,9 +235,17 @@ export function exportBestSellersPDF({ bestSellers, totalRevenue, totalProfit })
     doc.text(k.val, x + cardW / 2, startY + 13, { align: "center" });
   });
 
-  const tableBody = (bestSellers || []).map((item, idx) => {
-    const maxQty = bestSellers[0]?.qty || 1;
-    const sharePct = Math.round((item.qty / maxQty) * 100);
+  const sortedList = [...(bestSellers || [])].sort((a, b) => {
+    if (sortBy === "profit") return (b.profit || 0) - (a.profit || 0);
+    if (sortBy === "qty") return (b.qty || 0) - (a.qty || 0);
+    return (b.revenue || 0) - (a.revenue || 0);
+  });
+
+  const topMetricVal = sortedList[0] ? (sortBy === "profit" ? sortedList[0].profit : sortBy === "qty" ? sortedList[0].qty : sortedList[0].revenue) || 1 : 1;
+
+  const tableBody = sortedList.map((item, idx) => {
+    const metricVal = sortBy === "profit" ? item.profit : sortBy === "qty" ? item.qty : item.revenue;
+    const sharePct = topMetricVal > 0 ? Math.round((metricVal / topMetricVal) * 100) : 0;
     const marginPct = item.revenue > 0 ? Math.round((item.profit / item.revenue) * 100) : 0;
     return [
       `#${idx + 1}`,
@@ -274,8 +283,8 @@ export function exportBestSellersPDF({ bestSellers, totalRevenue, totalProfit })
       0: { cellWidth: 14, halign: "center", fontStyle: "bold" },
       1: { cellWidth: 50, fontStyle: "bold" },
       2: { cellWidth: 30 },
-      3: { cellWidth: 22, halign: "right" },
-      4: { cellWidth: 28, halign: "right" },
+      3: { cellWidth: 22, halign: "right", fontStyle: sortBy === "qty" ? "bold" : "normal" },
+      4: { cellWidth: 28, halign: "right", fontStyle: sortBy === "revenue" ? "bold" : "normal" },
       5: { cellWidth: 28, halign: "right", fontStyle: "bold", textColor: [47, 128, 80] },
       6: { cellWidth: 18, halign: "center" },
       7: { cellWidth: 16, halign: "center" },
@@ -419,7 +428,7 @@ export function exportInventoryPDF({ products, suppliers }) {
 /**
  * Export Financial & Performance Report to PDF
  */
-export function exportReportCenterPDF({ monthName, revenue, cogs, grossProfit, expenses, netProfit, rankedProducts, lowStock, debts }) {
+export function exportReportCenterPDF({ monthName, revenue, cogs, grossProfit, expenses, netProfit, rankedProducts, debts }) {
   const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
   
   const subtitle = `Period: ${monthName} · Financial Summary & Performance Analysis`;

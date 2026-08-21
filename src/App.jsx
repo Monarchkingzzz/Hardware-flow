@@ -3,10 +3,9 @@ import {
   LayoutDashboard, ShoppingCart, Package, Truck, Building2, Users, CreditCard,
   FileText, BookOpen, BarChart3, ShieldAlert, Lock, Search, Plus, X, Check,
   AlertTriangle, TrendingUp, TrendingDown, ChevronRight, Minus, Trash2,
-  ArrowRight, Receipt as ReceiptIcon, Download, Eye, Calendar, Clock,
-  DollarSign, Award, Filter, RefreshCw, CheckCircle2, Sun, Moon,
-  LogOut, User as UserIcon, Key, Coins, Wallet, Settings, Edit3, Printer,
-  Cloud, Database, CloudUpload
+  ArrowRight, Receipt as ReceiptIcon, Download, Eye, Calendar,
+  Award, CheckCircle2, Sun, Moon,
+  LogOut, Key, Coins, Edit3, Menu, Wifi, WifiOff, RefreshCw
 } from "lucide-react";
 import {
   exportAuditLogPDF,
@@ -17,11 +16,14 @@ import {
 } from "./utils/pdfExport";
 import { ToastContainer } from "./components/Toast";
 import { LoginScreen, ForgotPasswordModal, ProfileModal, UserManagementModal } from "./components/Auth";
-import { SupabaseSyncModal } from "./components/SupabaseSyncModal";
+import { autoSyncDatabase, pullDatabaseFromSupabase, subscribeToSupabaseRealtime, getIsSyncing } from "./utils/supabaseClient";
+import { hashPassword, sanitizeUserForSession } from "./utils/security";
+import { useOnlineStatus, enqueueOfflineSale, syncOfflineQueue } from "./utils/offlineSync";
+import { usePWAInstall } from "./utils/usePWAInstall";
 
 /* ---------------------------------------------------------------
    HardwareFlow — Business Management System
-   Data persists via localStorage.
+   Data persists via localStorage with automatic Supabase Cloud Sync.
    Design: Industrial ledger with Dark/Light theme & Full Auth.
 ---------------------------------------------------------------- */
 
@@ -154,13 +156,9 @@ function buildSeed() {
   };
 }
 
-/* ---------- storage hook ---------- */
+/* ---------- storage hook with real-time Supabase syncing ---------- */
 function useDB() {
-  const [db, setDb] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const saveTimer = useRef(null);
-
-  useEffect(() => {
+  const [db, setDb] = useState(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
@@ -168,32 +166,116 @@ function useDB() {
         if (!parsed.users || parsed.users.length === 0) {
           parsed.users = buildSeed().users;
         }
-        setDb(parsed);
-      } else {
-        const initialData = buildSeed();
-        setDb(initialData);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(initialData));
+        return parsed;
       }
     } catch (error) {
-      console.error("Failed to load HardwareFlow data:", error);
-      const initialData = buildSeed();
-      setDb(initialData);
+      console.error("Failed to load HardwareFlow data from localStorage:", error);
     }
-    setLoading(false);
-  }, []);
+    const initialData = buildSeed();
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(initialData));
+    } catch (e) {
+      console.error(e);
+    }
+    return initialData;
+  });
 
+  const [loading] = useState(false);
+  const isInitialCloudSync = useRef(false);
+
+  // 1. Initial background cloud pull on app launch & automatic cryptographic password migration
+  useEffect(() => {
+    if (!isInitialCloudSync.current && db) {
+      isInitialCloudSync.current = true;
+      (async () => {
+        try {
+          const cloudDb = await pullDatabaseFromSupabase();
+          const hasCloudData = cloudDb && (
+            (cloudDb.products && cloudDb.products.length > 0) ||
+            (cloudDb.sales && cloudDb.sales.length > 0) ||
+            (cloudDb.customers && cloudDb.customers.length > 0) ||
+            (cloudDb.expenses && cloudDb.expenses.length > 0)
+          );
+
+          let targetDb = db;
+          if (hasCloudData) {
+            targetDb = cloudDb;
+          }
+
+          // Check if any users have unhashed legacy passwords or pins
+          let needsMigration = false;
+          const upgradedUsers = await Promise.all(
+            (targetDb.users || []).map(async (u) => {
+              let updated = { ...u };
+              if (u.password && !u.password.startsWith("pbkdf2:")) {
+                updated.password = await hashPassword(u.password);
+                needsMigration = true;
+              }
+              if (u.pin && !u.pin.startsWith("pbkdf2:")) {
+                updated.pin = await hashPassword(u.pin);
+                needsMigration = true;
+              }
+              return updated;
+            })
+          );
+
+          if (needsMigration) {
+            targetDb = { ...targetDb, users: upgradedUsers };
+            console.log("[HardwareFlow Security] Upgraded credentials to salted PBKDF2-SHA256 hashes.");
+          }
+
+          setDb(targetDb);
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(targetDb));
+
+          if (!hasCloudData || needsMigration) {
+            autoSyncDatabase(targetDb, 0);
+          }
+        } catch (err) {
+          console.warn("[HardwareFlow] Initial Supabase cloud fetch notice:", err.message || err);
+        }
+      })();
+    }
+  }, [db]);
+
+  // 2. Persist locally and push updates to Supabase immediately in real-time
   useEffect(() => {
     if (!db) return;
-    clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => {
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
-      } catch (error) {
-        console.error("Failed to save HardwareFlow data:", error);
-      }
-    }, 250);
-    return () => clearTimeout(saveTimer.current);
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+    } catch (error) {
+      console.error("Failed to save HardwareFlow data to localStorage:", error);
+    }
+    // Push immediately to Supabase in real-time
+    autoSyncDatabase(db, 50);
   }, [db]);
+
+  // 3. Realtime Supabase Subscription: Listen for changes from other sessions/cloud
+  useEffect(() => {
+    let cloudPullTimeout = null;
+    const unsubscribe = subscribeToSupabaseRealtime(async () => {
+      // Avoid pulling our own echo while an active push is in flight
+      if (getIsSyncing()) return;
+
+      if (cloudPullTimeout) clearTimeout(cloudPullTimeout);
+      cloudPullTimeout = setTimeout(async () => {
+        try {
+          if (getIsSyncing()) return;
+          const cloudDb = await pullDatabaseFromSupabase();
+          if (cloudDb && cloudDb.products && cloudDb.products.length > 0) {
+            setDb(cloudDb);
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(cloudDb));
+          }
+        } catch (err) {
+          console.warn("[HardwareFlow] Realtime sync refresh notice:", err);
+        }
+      }, 300);
+    });
+
+    return () => {
+      if (cloudPullTimeout) clearTimeout(cloudPullTimeout);
+      if (typeof unsubscribe === "function") unsubscribe();
+    };
+  }, []);
 
   return [db, setDb, loading];
 }
@@ -305,6 +387,109 @@ const GlobalStyle = ({ theme }) => {
       .hf-icon-circle { width: 34px; height: 34px; border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
       .text-profit { color: var(--green) !important; }
       .text-loss { color: var(--red) !important; }
+
+      /* Mobile Phone Optimization & Responsive Layout */
+      .hf-mobile-header {
+        display: none;
+      }
+      .hf-mobile-bottomnav {
+        display: none;
+      }
+      .hf-mobile-backdrop {
+        display: none;
+      }
+      .hf-table-responsive {
+        width: 100%;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+
+      @media (max-width: 768px) {
+        .hf-mobile-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 10px 14px;
+          background: var(--tab-bg);
+          color: #fff;
+          position: sticky;
+          top: 0;
+          z-index: 900;
+          border-bottom: 1px solid rgba(255,255,255,0.08);
+        }
+        .hf-mobile-backdrop {
+          display: block;
+          position: fixed;
+          inset: 0;
+          background: rgba(0,0,0,0.65);
+          backdrop-filter: blur(2px);
+          z-index: 1000;
+        }
+        .hf-sidebar {
+          position: fixed !important;
+          top: 0;
+          left: 0;
+          bottom: 0;
+          width: 270px !important;
+          z-index: 1100;
+          transform: translateX(-100%);
+          transition: transform .22s ease-in-out;
+          box-shadow: 0 0 30px rgba(0,0,0,0.5);
+        }
+        .hf-sidebar.open {
+          transform: translateX(0) !important;
+        }
+        .hf-desktop-topbar {
+          display: none !important;
+        }
+        .hf-main-content-wrap {
+          padding: 14px 12px 85px !important;
+        }
+        .hf-mobile-bottomnav {
+          display: flex;
+          position: fixed;
+          bottom: 0;
+          left: 0;
+          right: 0;
+          height: 60px;
+          background: var(--surface);
+          border-top: 1px solid var(--line);
+          z-index: 950;
+          justify-content: space-around;
+          align-items: center;
+          padding: 0 4px;
+          box-shadow: 0 -4px 16px rgba(0,0,0,0.06);
+        }
+        .hf-bottom-item {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 3px;
+          flex: 1;
+          height: 100%;
+          color: var(--ink-soft);
+          font-size: 10px;
+          font-weight: 600;
+          cursor: pointer;
+          border: none;
+          background: transparent;
+        }
+        .hf-bottom-item.active {
+          color: var(--rust);
+        }
+        .hf-ticket {
+          padding: 12px 14px !important;
+          min-height: 96px !important;
+          height: auto !important;
+        }
+        .hf-card {
+          border-radius: 10px;
+        }
+        .hf-btn {
+          min-height: 40px;
+        }
+      }
     `}</style>
   );
 };
@@ -363,6 +548,8 @@ function Dashboard({ db, role, notify }) {
   const lowStock = db.products.filter(p => p.stock <= p.minStock);
   const slowMoving = db.products.filter(p => !db.sales.some(s => s.items.some(i => i.productId === p.id) && s.date >= todayISO(-14)));
 
+  const [bestSellerSort, setBestSellerSort] = useState("revenue"); // "revenue" | "profit" | "qty"
+
   const bestSellers = useMemo(() => {
     const counts = {};
     db.sales.forEach(s => {
@@ -377,31 +564,42 @@ function Dashboard({ db, role, notify }) {
         counts[p.id].profit += it.qty * (it.unitPrice - (it.unitCost || 0));
       });
     });
-    return Object.values(counts).sort((a, b) => b.qty - a.qty);
+    return Object.values(counts);
   }, [db.sales, db.products]);
 
-  let netLabel = "Net Profit Today";
+  const sortedBestSellers = useMemo(() => {
+    return [...bestSellers].sort((a, b) => {
+      if (bestSellerSort === "profit") return b.profit - a.profit;
+      if (bestSellerSort === "qty") return b.qty - a.qty;
+      return b.revenue - a.revenue;
+    });
+  }, [bestSellers, bestSellerSort]);
+
+  let netLabel = "Net Income Today";
   let netTone = "green";
-  let netValue = net;
+  let netValue = "+" + fmt(net);
   let netColor = "var(--green)";
+  let netSub = "Profit margin positive";
 
   if (salesToday.length === 0 && expensesToday === 0) {
-    netLabel = "Net Profit / Loss";
+    netLabel = "Net Income Today";
     netTone = "ink";
-    netValue = 0;
+    netValue = fmt(0);
     netColor = "var(--ink-soft)";
+    netSub = "Break-even today";
   } else if (net < 0) {
-    netLabel = "Net Loss Today";
+    netLabel = "Net Income Today";
     netTone = "red";
-    netValue = Math.abs(net);
+    netValue = "-" + fmt(Math.abs(net));
     netColor = "var(--red)";
+    netSub = "Expenses exceed daily margin";
   }
 
   const kpis = [
     { label: "Sales Today", value: fmt(revenueToday), tone: "ink", icon: ReceiptIcon, rawVal: revenueToday },
     { label: "Gross Profit", value: fmt(profitToday), tone: "green", ownerOnly: true, icon: TrendingUp, valColor: "var(--green)", rawVal: profitToday },
     { label: "Expenses Today", value: fmt(expensesToday), tone: "amber", ownerOnly: true, icon: TrendingDown, valColor: "var(--amber)", rawVal: expensesToday },
-    { label: netLabel, value: fmt(netValue), tone: netTone, ownerOnly: true, icon: BarChart3, valColor: netColor, rawVal: net },
+    { label: netLabel, value: netValue, tone: netTone, ownerOnly: true, icon: BarChart3, valColor: netColor, rawVal: net, sub: netSub },
     { label: "Debts Collected Today", value: fmt(debtsCollectedToday), tone: "green", icon: Coins, valColor: "var(--green)", rawVal: debtsCollectedToday },
     { label: "Customer Debts", value: fmt(totalDebt), tone: "steel", icon: Users, rawVal: totalDebt },
     { label: "Supplier Balances", value: fmt(totalSupplierBal), tone: "steel", ownerOnly: true, icon: Building2, rawVal: totalSupplierBal },
@@ -418,11 +616,12 @@ function Dashboard({ db, role, notify }) {
 
   function downloadBestSellersPDF() {
     exportBestSellersPDF({
-      bestSellers,
+      bestSellers: sortedBestSellers,
       totalRevenue: bestSellers.reduce((a, b) => a + b.revenue, 0),
       totalProfit: bestSellers.reduce((a, b) => a + b.profit, 0),
+      sortBy: bestSellerSort,
     });
-    notify("success", "Analytics PDF Exported", "Best-selling products report downloaded.");
+    notify("success", "Analytics PDF Exported", `Best-selling products report (${bestSellerSort.toUpperCase()}) downloaded.`);
   }
 
   return (
@@ -434,7 +633,7 @@ function Dashboard({ db, role, notify }) {
         </div>
       </div>
 
-      {/* KPI Cards Grid with Perfect Straight Line Alignment */}
+      {/* KPI Cards Grid with Perfect Straight Line Alignment & Subtitles */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px,1fr))", gap: 12, marginBottom: 22 }}>
         {kpis.map((k, i) => {
           const hidden = k.ownerOnly && role !== "owner";
@@ -467,18 +666,25 @@ function Dashboard({ db, role, notify }) {
                   <Lock size={14} /><span style={{ fontSize: 13 }}>Owner only</span>
                 </div>
               ) : (
-                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
-                  <div
-                    className="mono"
-                    style={{
-                      fontSize: 22,
-                      fontWeight: 700,
-                      color: k.valColor || "var(--ink)",
-                      lineHeight: 1,
-                    }}
-                  >
-                    {k.value}
+                <div>
+                  <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
+                    <div
+                      className="mono"
+                      style={{
+                        fontSize: 22,
+                        fontWeight: 700,
+                        color: k.valColor || "var(--ink)",
+                        lineHeight: 1,
+                      }}
+                    >
+                      {k.value}
+                    </div>
                   </div>
+                  {k.sub && (
+                    <div style={{ fontSize: 10.5, color: "var(--ink-soft)", marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {k.sub}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -486,41 +692,112 @@ function Dashboard({ db, role, notify }) {
         })}
       </div>
 
-      {/* Best-Selling Products Section (OWNER ONLY) with PDF Download */}
+      {/* Best-Selling Products Section (OWNER ONLY) with Metric Filter Pills & PDF Download */}
       {role === "owner" && (
         <div style={{ marginBottom: 24 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
-            <div className="disp" style={{ fontSize: 20, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>
-              <Award size={18} color="var(--rust)" />
-              Best-Selling Products (Owner Analytics)
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
+            <div>
+              <div className="disp" style={{ fontSize: 20, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>
+                <Award size={18} color="var(--rust)" />
+                Best-Selling Products (Owner Analytics)
+              </div>
+              <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 2 }}>
+                Rank products by sales volume, total monetary revenue, or profit contribution.
+              </div>
             </div>
-            <button
-              className="hf-btn hf-btn-ghost"
-              style={{ padding: "6px 12px", fontSize: 12.5 }}
-              onClick={downloadBestSellersPDF}
-              title="Download PDF report of best-selling products analytics"
-            >
-              <Download size={14} /> Download Analytics PDF
-            </button>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              {/* Metric Ranking Toggle Pills */}
+              <div style={{ display: "flex", gap: 4, background: "var(--surface-hover)", border: "1px solid var(--line)", padding: 3, borderRadius: 9 }}>
+                <button
+                  type="button"
+                  onClick={() => setBestSellerSort("revenue")}
+                  className="hf-btn"
+                  style={{
+                    padding: "5px 11px",
+                    fontSize: 12,
+                    background: bestSellerSort === "revenue" ? "var(--rust)" : "transparent",
+                    color: bestSellerSort === "revenue" ? "#fff" : "var(--ink)",
+                    boxShadow: bestSellerSort === "revenue" ? "var(--shadow-sm)" : "none",
+                  }}
+                  title="Rank by gross monetary revenue (KSh)"
+                >
+                  💰 Total Revenue
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBestSellerSort("profit")}
+                  className="hf-btn"
+                  style={{
+                    padding: "5px 11px",
+                    fontSize: 12,
+                    background: bestSellerSort === "profit" ? "var(--green)" : "transparent",
+                    color: bestSellerSort === "profit" ? "#fff" : "var(--ink)",
+                    boxShadow: bestSellerSort === "profit" ? "var(--shadow-sm)" : "none",
+                  }}
+                  title="Rank by highest gross margin generated"
+                >
+                  📈 Gross Profit
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBestSellerSort("qty")}
+                  className="hf-btn"
+                  style={{
+                    padding: "5px 11px",
+                    fontSize: 12,
+                    background: bestSellerSort === "qty" ? "var(--steel)" : "transparent",
+                    color: bestSellerSort === "qty" ? "#fff" : "var(--ink)",
+                    boxShadow: bestSellerSort === "qty" ? "var(--shadow-sm)" : "none",
+                  }}
+                  title="Rank by number of physical units sold"
+                >
+                  📦 Units Sold
+                </button>
+              </div>
+
+              <button
+                className="hf-btn hf-btn-ghost"
+                style={{ padding: "6px 12px", fontSize: 12.5 }}
+                onClick={downloadBestSellersPDF}
+                title="Download PDF report of best-selling products analytics"
+              >
+                <Download size={14} /> Download PDF
+              </button>
+            </div>
           </div>
 
-          <div className="hf-card" style={{ padding: 6, overflowX: "auto" }}>
+          <div className="hf-card hf-table-responsive" style={{ padding: 6 }}>
             <table className="hf-table">
               <thead>
                 <tr>
                   <th style={{ width: 60 }}>Rank</th>
                   <th>Product</th>
                   <th>Category</th>
-                  <th style={{ textAlign: "right" }}>Units Sold</th>
-                  <th style={{ textAlign: "right" }}>Total Revenue</th>
-                  <th style={{ textAlign: "right" }}>Gross Profit</th>
-                  <th style={{ width: 140 }}>Sales Share</th>
+                  <th style={{ textAlign: "right", background: bestSellerSort === "qty" ? "var(--surface-hover)" : "transparent" }}>
+                    Units Sold {bestSellerSort === "qty" && "▾"}
+                  </th>
+                  <th style={{ textAlign: "right", background: bestSellerSort === "revenue" ? "var(--surface-hover)" : "transparent" }}>
+                    Total Revenue {bestSellerSort === "revenue" && "▾"}
+                  </th>
+                  <th style={{ textAlign: "right", background: bestSellerSort === "profit" ? "var(--surface-hover)" : "transparent" }}>
+                    Gross Profit {bestSellerSort === "profit" && "▾"}
+                  </th>
+                  <th style={{ width: 140 }}>
+                    {bestSellerSort === "profit" ? "Profit Share" : bestSellerSort === "qty" ? "Volume Share" : "Revenue Share"}
+                  </th>
                 </tr>
               </thead>
               <tbody>
-                {bestSellers.slice(0, 5).map((item, idx) => {
-                  const maxQty = bestSellers[0]?.qty || 1;
-                  const pct = Math.round((item.qty / maxQty) * 100);
+                {sortedBestSellers.slice(0, 5).map((item, idx) => {
+                  const topProduct = sortedBestSellers[0];
+                  const maxMetric = topProduct
+                    ? (bestSellerSort === "profit" ? topProduct.profit : bestSellerSort === "qty" ? topProduct.qty : topProduct.revenue) || 1
+                    : 1;
+                  const currentMetric = bestSellerSort === "profit" ? item.profit : bestSellerSort === "qty" ? item.qty : item.revenue;
+                  const pct = maxMetric > 0 ? Math.round((currentMetric / maxMetric) * 100) : 0;
+                  const barColor = bestSellerSort === "profit" ? "var(--green)" : bestSellerSort === "qty" ? "var(--steel)" : "var(--rust)";
+
                   return (
                     <tr key={item.id}>
                       <td>
@@ -535,18 +812,24 @@ function Dashboard({ db, role, notify }) {
                       </td>
                       <td style={{ fontWeight: 600 }}>{item.name}</td>
                       <td>{item.category}</td>
-                      <td className="mono" style={{ textAlign: "right", fontWeight: 600 }}>{item.qty} units</td>
-                      <td className="mono" style={{ textAlign: "right" }}>{fmt(item.revenue)}</td>
-                      <td className="mono text-profit" style={{ textAlign: "right", fontWeight: 700 }}>{fmt(item.profit)}</td>
+                      <td className="mono" style={{ textAlign: "right", fontWeight: bestSellerSort === "qty" ? 700 : 500 }}>
+                        {item.qty.toLocaleString()} units
+                      </td>
+                      <td className="mono" style={{ textAlign: "right", fontWeight: bestSellerSort === "revenue" ? 700 : 500 }}>
+                        {fmt(item.revenue)}
+                      </td>
+                      <td className="mono text-profit" style={{ textAlign: "right", fontWeight: 700 }}>
+                        {fmt(item.profit)}
+                      </td>
                       <td>
                         <div style={{ background: "var(--line)", borderRadius: 6, height: 8, width: "100%", overflow: "hidden" }}>
-                          <div style={{ background: "var(--rust)", height: "100%", width: `${pct}%`, borderRadius: 6 }} />
+                          <div style={{ background: barColor, height: "100%", width: `${pct}%`, borderRadius: 6 }} />
                         </div>
                       </td>
                     </tr>
                   );
                 })}
-                {bestSellers.length === 0 && (
+                {sortedBestSellers.length === 0 && (
                   <tr>
                     <td colSpan={7} style={{ textAlign: "center", color: "var(--ink-soft)", padding: 20 }}>
                       No product sales recorded yet.
@@ -645,11 +928,30 @@ function POS({ db, setDb, role, notify, currentUser }) {
   const [splitCash, setSplitCash] = useState(0);
   const [receiptSale, setReceiptSale] = useState(null);
 
+  // Offline Sync State
+  const { isOnline, queuedCount, refreshQueueCount } = useOnlineStatus();
+  const [isSyncingOffline, setIsSyncingOffline] = useState(false);
+
   // Sales History Filter States
   const [histStartDate, setHistStartDate] = useState(todayISO(0));
   const [histEndDate, setHistEndDate] = useState(todayISO(0));
   const [histSearch, setHistSearch] = useState("");
   const [histPayment, setHistPayment] = useState("all");
+
+  // Auto-sync offline sales when connectivity returns
+  useEffect(() => {
+    let active = true;
+    if (isOnline && queuedCount > 0) {
+      syncOfflineQueue(db, notify).then(() => {
+        if (active) {
+          refreshQueueCount();
+        }
+      });
+    }
+    return () => {
+      active = false;
+    };
+  }, [isOnline, queuedCount, db, notify, refreshQueueCount]);
 
   const results = query.length > 0
     ? db.products.filter(p => p.name.toLowerCase().includes(query.toLowerCase()) || p.sku.toLowerCase().includes(query.toLowerCase()))
@@ -721,6 +1023,15 @@ function POS({ db, setDb, role, notify, currentUser }) {
   const total = lines.reduce((a, l) => a + l.lineTotal, 0);
   const custAvailable = customerId ? (db.customers.find(c => c.id === customerId)?.creditLimit || 0) - customerBalance(db, customerId) : null;
 
+  function triggerManualSync() {
+    if (isSyncingOffline) return;
+    setIsSyncingOffline(true);
+    syncOfflineQueue(db, notify).finally(() => {
+      setIsSyncingOffline(false);
+      refreshQueueCount();
+    });
+  }
+
   function completeSale() {
     if (lines.length === 0) {
       notify("warning", "Cart is Empty", "Search and select products before checkout.");
@@ -766,9 +1077,11 @@ function POS({ db, setDb, role, notify, currentUser }) {
       payment,
       splitCash: payment === "split" ? splitCash : null,
       customerId: payment === "credit" ? customerId : (customerId || null),
-      employee
+      employee,
+      offline: !navigator.onLine,
     };
 
+    // Instant local stock reduction & persistence (0ms latency for Kenyan retail counters)
     setDb(prev => {
       const products = prev.products.map(p => {
         const line = saleItems.find(i => i.productId === p.id);
@@ -792,7 +1105,7 @@ function POS({ db, setDb, role, notify, currentUser }) {
             role: role === "owner" ? "Owner" : "Cashier",
             category: payment === "credit" ? "Credit Sale" : "Sale",
             action: `Sold ${saleItems.map(i=>i.qty).reduce((a,b)=>a+b,0)} item(s) — ${invoiceNo}`,
-            detail: `${fmt(total)} via ${payment.toUpperCase()}`,
+            detail: `${fmt(total)} via ${payment.toUpperCase()}${!navigator.onLine ? " (Offline)" : ""}`,
             target: invoiceNo,
           },
           ...prev.auditLog
@@ -800,7 +1113,13 @@ function POS({ db, setDb, role, notify, currentUser }) {
       };
     });
 
-    notify("success", "Sale Completed Successfully", `${invoiceNo} · Total: ${fmt(total)} (${payment.toUpperCase()})`);
+    if (!navigator.onLine) {
+      enqueueOfflineSale(sale);
+      notify("info", "Sale Saved Locally (Offline Mode)", `${invoiceNo} recorded instantly. Receipt generated & queued for cloud sync.`);
+    } else {
+      notify("success", "Sale Completed Successfully", `${invoiceNo} · Total: ${fmt(total)} (${payment.toUpperCase()})`);
+    }
+
     setReceiptSale(sale);
     setCart([]);
     setCustomerId("");
@@ -836,8 +1155,8 @@ function POS({ db, setDb, role, notify, currentUser }) {
 
   return (
     <div>
-      {/* POS Navigation Tabs */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+      {/* POS Top Bar: Tabs & Live Connectivity Status */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
         <div style={{ display: "flex", gap: 8, background: "var(--line)", padding: 3, borderRadius: 10 }}>
           <button
             onClick={() => setActiveTab("pos")}
@@ -864,10 +1183,60 @@ function POS({ db, setDb, role, notify, currentUser }) {
             <Calendar size={15} /> Sales History & Period Search
           </button>
         </div>
+
+        {/* Live Connectivity Badge for Kenyan Network Reliability */}
+        <div style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          fontSize: 12,
+          fontWeight: 600,
+          padding: "6px 12px",
+          borderRadius: 20,
+          background: isOnline ? (queuedCount > 0 ? "var(--amber-tint)" : "var(--green-tint)") : "var(--red-tint)",
+          color: isOnline ? (queuedCount > 0 ? "var(--amber)" : "var(--green)") : "var(--red)",
+          border: `1px solid ${isOnline ? (queuedCount > 0 ? "var(--amber)" : "var(--green)") : "var(--red)"}`,
+        }}>
+          {isOnline ? (
+            queuedCount > 0 ? (
+              <>
+                <RefreshCw size={13} style={{ animation: isSyncingOffline ? "spin 1s linear infinite" : "none" }} />
+                <span>{queuedCount} offline sale(s) queued</span>
+                <button
+                  type="button"
+                  onClick={triggerManualSync}
+                  className="hf-btn"
+                  style={{
+                    padding: "2px 8px",
+                    fontSize: 11,
+                    background: "var(--amber)",
+                    color: "#fff",
+                    marginLeft: 4,
+                    borderRadius: 6,
+                    height: 22,
+                  }}
+                  disabled={isSyncingOffline}
+                >
+                  {isSyncingOffline ? "Syncing…" : "Sync Now"}
+                </button>
+              </>
+            ) : (
+              <>
+                <Wifi size={13} />
+                <span>Online · Cloud Synced</span>
+              </>
+            )
+          ) : (
+            <>
+              <WifiOff size={13} />
+              <span>Offline Mode (Local Storage active {queuedCount > 0 ? `· ${queuedCount} queued` : ""})</span>
+            </>
+          )}
+        </div>
       </div>
 
       {activeTab === "pos" ? (
-        <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 18, alignItems: "flex-start" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 18, alignItems: "flex-start" }}>
           <div>
             <div className="disp" style={{ fontSize: 26, fontWeight: 700, marginBottom: 12 }}>New Sale</div>
             <div style={{ position: "relative", marginBottom: 10 }}>
@@ -904,7 +1273,7 @@ function POS({ db, setDb, role, notify, currentUser }) {
               </div>
             )}
 
-            <div className="hf-card" style={{ padding: 4 }}>
+            <div className="hf-card hf-table-responsive" style={{ padding: 4 }}>
               <table className="hf-table">
                 <thead>
                   <tr>
@@ -976,10 +1345,11 @@ function POS({ db, setDb, role, notify, currentUser }) {
             </div>
           </div>
 
+          {/* Checkout Column */}
           <div className="hf-ticket" style={{ padding: 18, position: "sticky", top: 16 }}>
             <div className="disp" style={{ fontSize: 20, fontWeight: 700, marginBottom: 12 }}>Checkout</div>
 
-            {/* Pricing Tier Options: Fully visible in both Light and Dark themes */}
+            {/* Pricing Tier Options */}
             <div style={{ marginBottom: 10 }}>
               <div className="hf-kpi-label" style={{ marginBottom: 4 }}>Pricing Tier</div>
               <div style={{ display: "flex", gap: 6 }}>
@@ -2903,6 +3273,10 @@ export default function App() {
   const [db, setDb, loading] = useDB();
   const [page, setPage] = useState("dashboard");
   const [toasts, setToasts] = useState([]);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  // Progressive Web App Install hook
+  const { isInstallable, isInstalled, promptInstall } = usePWAInstall();
 
   const [theme, setTheme] = useState(() => {
     try {
@@ -2915,7 +3289,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(() => {
     try {
       const saved = localStorage.getItem(AUTH_KEY);
-      return saved ? JSON.parse(saved) : null;
+      return saved ? sanitizeUserForSession(JSON.parse(saved)) : null;
     } catch {
       return null;
     }
@@ -2924,7 +3298,6 @@ export default function App() {
   const [showForgotPass, setShowForgotPass] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const [showUserMgmt, setShowUserMgmt] = useState(false);
-  const [showSupabaseModal, setShowSupabaseModal] = useState(false);
   const [userDropdown, setUserDropdown] = useState(false);
 
   function toggleTheme() {
@@ -2934,21 +3307,23 @@ export default function App() {
   }
 
   function handleLogin(user) {
-    setCurrentUser(user);
-    localStorage.setItem(AUTH_KEY, JSON.stringify(user));
-    notify("success", `Welcome back, ${user.name}!`, `Signed in as ${user.role.toUpperCase()}`);
+    const safeUser = sanitizeUserForSession(user);
+    setCurrentUser(safeUser);
+    localStorage.setItem(AUTH_KEY, JSON.stringify(safeUser));
+    notify("success", `Welcome back, ${safeUser.name}!`, `Signed in as ${safeUser.role.toUpperCase()}`);
   }
 
   function handleLogout() {
     setCurrentUser(null);
     localStorage.removeItem(AUTH_KEY);
     setUserDropdown(false);
-    notify("info", "Signed Out", "You have been logged out of the system.");
+    notify("info", "Signed Out", "You have been securely logged out.");
   }
 
   function handleUserUpdate(updated) {
-    setCurrentUser(updated);
-    localStorage.setItem(AUTH_KEY, JSON.stringify(updated));
+    const safeUser = sanitizeUserForSession(updated);
+    setCurrentUser(safeUser);
+    localStorage.setItem(AUTH_KEY, JSON.stringify(safeUser));
   }
 
   const notify = (type, message, detail) => {
@@ -3016,29 +3391,45 @@ export default function App() {
   };
 
   return (
-    <div className="hf-root" style={{ minHeight: "100vh", display: "flex" }}>
+    <div className="hf-root" style={{ minHeight: "100vh", display: "flex", flexDirection: "row" }}>
       <GlobalStyle theme={theme} />
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
-      {/* Sidebar */}
-      <div className="hf-sidebar" style={{ width: 240, background: "var(--tab-bg)", flexShrink: 0, display: "flex", flexDirection: "column", padding: "20px 0" }}>
-        <div style={{ padding: "0 20px 22px", display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{
-            width: 34, height: 34, borderRadius: 10,
-            background: "linear-gradient(155deg,#C7573A,var(--rust-dark))",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            boxShadow: "0 4px 12px -3px rgba(193,80,47,0.6)", flexShrink: 0
-          }}>
-            <Package size={17} color="#fff" />
-          </div>
-          <div>
-            <div className="disp" style={{ color: "#fff", fontSize: 19, fontWeight: 700, letterSpacing: "0.01em", lineHeight: 1 }}>
-              HARDWARE<span style={{ color: "#E8977E" }}>FLOW</span>
+      {/* Mobile Drawer Backdrop */}
+      {mobileNavOpen && (
+        <div className="hf-mobile-backdrop" onClick={() => setMobileNavOpen(false)} />
+      )}
+
+      {/* Sidebar Navigation */}
+      <div className={`hf-sidebar ${mobileNavOpen ? "open" : ""}`} style={{ width: 240, background: "var(--tab-bg)", flexShrink: 0, display: "flex", flexDirection: "column", padding: "20px 0" }}>
+        <div style={{ padding: "0 20px 22px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{
+              width: 34, height: 34, borderRadius: 10,
+              background: "linear-gradient(155deg,#C7573A,var(--rust-dark))",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              boxShadow: "0 4px 12px -3px rgba(193,80,47,0.6)", flexShrink: 0
+            }}>
+              <Package size={17} color="#fff" />
             </div>
-            <div style={{ color: "#767E8C", fontSize: 10.5, marginTop: 3 }}>Cash-flow & stock control</div>
+            <div>
+              <div className="disp" style={{ color: "#fff", fontSize: 19, fontWeight: 700, letterSpacing: "0.01em", lineHeight: 1 }}>
+                HARDWARE<span style={{ color: "#E8977E" }}>FLOW</span>
+              </div>
+              <div style={{ color: "#767E8C", fontSize: 10.5, marginTop: 3 }}>Cash-flow & stock control</div>
+            </div>
           </div>
+          {/* Close button inside mobile drawer */}
+          <button
+            type="button"
+            onClick={() => setMobileNavOpen(false)}
+            style={{ display: mobileNavOpen ? "flex" : "none", background: "transparent", border: "none", color: "#A9B0BC", cursor: "pointer", padding: 4 }}
+          >
+            <X size={18} />
+          </button>
         </div>
-        <div style={{ flex: 1 }}>
+
+        <div style={{ flex: 1, overflowY: "auto" }}>
           {NAV.map(item => {
             const Icon = item.icon;
             const ok = allowed(item);
@@ -3046,7 +3437,10 @@ export default function App() {
               <div
                 key={item.key}
                 className={`hf-navitem ${page === item.key ? "active" : ""} ${!ok ? "locked" : ""}`}
-                onClick={() => setPage(item.key)}
+                onClick={() => {
+                  setPage(item.key);
+                  setMobileNavOpen(false);
+                }}
               >
                 <Icon size={16} />
                 <span style={{ flex: 1 }}>{item.label}</span>
@@ -3061,8 +3455,69 @@ export default function App() {
       </div>
 
       {/* Main Content Area */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
-        <div style={{
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
+        {/* Mobile Header Bar */}
+        <div className="hf-mobile-header">
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <button
+              type="button"
+              onClick={() => setMobileNavOpen(!mobileNavOpen)}
+              style={{ background: "transparent", border: "none", color: "#fff", cursor: "pointer", display: "flex", padding: 4 }}
+              title="Open Menu"
+            >
+              <Menu size={22} />
+            </button>
+            <div className="disp" style={{ fontSize: 17, fontWeight: 700, letterSpacing: "0.02em" }}>
+              HARDWARE<span style={{ color: "#E8977E" }}>FLOW</span>
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {/* Mobile PWA Install Prompt Button */}
+            {isInstallable && !isInstalled && (
+              <button
+                type="button"
+                onClick={promptInstall}
+                style={{
+                  background: "var(--rust)",
+                  border: "none",
+                  color: "#fff",
+                  padding: "5px 9px",
+                  borderRadius: 8,
+                  cursor: "pointer",
+                  fontSize: 11.5,
+                  fontWeight: 700,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                  boxShadow: "0 2px 6px rgba(193,80,47,0.4)"
+                }}
+                title="Add HardwareFlow to Home Screen"
+              >
+                <Download size={13} /> Install
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={toggleTheme}
+              style={{ background: "rgba(255,255,255,0.1)", border: "none", color: "#fff", padding: "6px 8px", borderRadius: 8, cursor: "pointer" }}
+              title="Toggle Theme"
+            >
+              {theme === "dark" ? <Sun size={15} color="#FBBF24" /> : <Moon size={15} color="#fff" />}
+            </button>
+            <div
+              onClick={() => setUserDropdown(!userDropdown)}
+              style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", background: "rgba(255,255,255,0.12)", padding: "4px 8px", borderRadius: 8 }}
+            >
+              <div style={{ width: 22, height: 22, borderRadius: "50%", background: "var(--rust)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>
+                {currentUser.name.charAt(0)}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Desktop Topbar */}
+        <div className="hf-desktop-topbar" style={{
           background: "var(--surface)",
           borderBottom: "1px solid var(--line)",
           padding: "14px 26px",
@@ -3073,26 +3528,18 @@ export default function App() {
         }}>
           <div className="disp" style={{ fontWeight: 700, fontSize: 18 }}>{currentNav?.label}</div>
 
-          {/* Top-Right Controls: Theme Toggle, Supabase Sync & User Account Dropdown */}
+          {/* Top-Right Controls: PWA Install, Theme Toggle & User Account Dropdown */}
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            {/* Supabase Cloud Sync Button (Owner only) */}
-            {role === "owner" && (
+            {/* Desktop PWA Install Button */}
+            {isInstallable && !isInstalled && (
               <button
-                onClick={() => setShowSupabaseModal(true)}
-                className="hf-btn hf-btn-ghost"
-                style={{
-                  padding: "7px 12px",
-                  borderRadius: 10,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                  color: "var(--green)",
-                  borderColor: "var(--line)",
-                }}
-                title="Push & Sync Database with Supabase Cloud"
+                type="button"
+                onClick={promptInstall}
+                className="hf-btn hf-btn-primary"
+                style={{ padding: "6px 13px", fontSize: 12.5, borderRadius: 9 }}
+                title="Install HardwareFlow on your Windows Desktop / Laptop"
               >
-                <Cloud size={15} color="var(--green)" />
-                <span style={{ fontSize: 12.5, fontWeight: 600 }}>Supabase Sync</span>
+                <Download size={14} /> Install Desktop App
               </button>
             )}
 
@@ -3146,9 +3593,9 @@ export default function App() {
                     right: 0,
                     top: "100%",
                     marginTop: 6,
-                    width: 220,
+                    width: 230,
                     padding: 6,
-                    zIndex: 100,
+                    zIndex: 1000,
                     boxShadow: "var(--shadow-lg)",
                   }}
                   onClick={() => setUserDropdown(false)}
@@ -3163,25 +3610,32 @@ export default function App() {
                   </div>
 
                   {role === "owner" && (
-                    <>
-                      <div
-                        onClick={() => setShowUserMgmt(true)}
-                        style={{ padding: "8px 12px", fontSize: 13, display: "flex", alignItems: "center", gap: 8, cursor: "pointer", borderRadius: 6 }}
-                        onMouseEnter={e => e.currentTarget.style.background = "var(--surface-hover)"}
-                        onMouseLeave={e => e.currentTarget.style.background = "transparent"}
-                      >
-                        <Users size={15} color="var(--ink-soft)" /> Staff & Accounts
-                      </div>
+                    <div
+                      onClick={() => setShowUserMgmt(true)}
+                      style={{ padding: "8px 12px", fontSize: 13, display: "flex", alignItems: "center", gap: 8, cursor: "pointer", borderRadius: 6 }}
+                      onMouseEnter={e => e.currentTarget.style.background = "var(--surface-hover)"}
+                      onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                    >
+                      <Users size={15} color="var(--ink-soft)" /> Staff & Accounts
+                    </div>
+                  )}
 
-                      <div
-                        onClick={() => setShowSupabaseModal(true)}
-                        style={{ padding: "8px 12px", fontSize: 13, display: "flex", alignItems: "center", gap: 8, cursor: "pointer", borderRadius: 6, color: "var(--green)" }}
-                        onMouseEnter={e => e.currentTarget.style.background = "var(--surface-hover)"}
-                        onMouseLeave={e => e.currentTarget.style.background = "transparent"}
-                      >
-                        <Database size={15} color="var(--green)" /> Supabase Cloud Sync
-                      </div>
-                    </>
+                  {/* Install PWA Option */}
+                  {!isInstalled && (
+                    <div
+                      onClick={() => {
+                        if (isInstallable) {
+                          promptInstall();
+                        } else {
+                          notify("info", "Install HardwareFlow", "To install HardwareFlow on your phone or desktop, tap your browser's menu (⋮ or Share) and select 'Add to Home screen' or 'Install'.");
+                        }
+                      }}
+                      style={{ padding: "8px 12px", fontSize: 13, display: "flex", alignItems: "center", gap: 8, cursor: "pointer", borderRadius: 6, color: "var(--rust)", fontWeight: 600 }}
+                      onMouseEnter={e => e.currentTarget.style.background = "var(--rust-tint)"}
+                      onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                    >
+                      <Download size={15} color="var(--rust)" /> Install App / Shortcut
+                    </div>
                   )}
 
                   <div style={{ borderTop: "1px solid var(--line)", margin: "4px 0" }} />
@@ -3200,8 +3654,65 @@ export default function App() {
           </div>
         </div>
 
-        <div style={{ padding: "24px 26px 60px", overflowY: "auto" }}>
-          {restricted ? <Locked label={currentNav.label} /> : pages[page]}
+        {/* Content Wrap */}
+        <div className="hf-main-content-wrap" style={{ padding: "24px 26px 60px", overflowY: "auto", flex: 1 }}>
+          {restricted ? <Locked label={currentNav?.label || "Page"} /> : pages[page]}
+        </div>
+
+        {/* Mobile Bottom Navigation Bar */}
+        <div className="hf-mobile-bottomnav">
+          <button
+            type="button"
+            className={`hf-bottom-item ${page === "pos" ? "active" : ""}`}
+            onClick={() => {
+              setPage("pos");
+              setMobileNavOpen(false);
+            }}
+          >
+            <ShoppingCart size={18} />
+            <span>POS</span>
+          </button>
+          <button
+            type="button"
+            className={`hf-bottom-item ${page === "dashboard" ? "active" : ""}`}
+            onClick={() => {
+              setPage("dashboard");
+              setMobileNavOpen(false);
+            }}
+          >
+            <LayoutDashboard size={18} />
+            <span>Overview</span>
+          </button>
+          <button
+            type="button"
+            className={`hf-bottom-item ${page === "inventory" ? "active" : ""}`}
+            onClick={() => {
+              setPage("inventory");
+              setMobileNavOpen(false);
+            }}
+          >
+            <Package size={18} />
+            <span>Stock</span>
+          </button>
+          <button
+            type="button"
+            className={`hf-bottom-item ${page === "cashbook" ? "active" : ""}`}
+            onClick={() => {
+              setPage("cashbook");
+              setMobileNavOpen(false);
+            }}
+          >
+            <Coins size={18} />
+            <span>Cash</span>
+          </button>
+          <button
+            type="button"
+            className="hf-bottom-item"
+            onClick={() => setMobileNavOpen(true)}
+          >
+            <Menu size={18} />
+            <span>Menu</span>
+          </button>
         </div>
       </div>
 
@@ -3223,16 +3734,6 @@ export default function App() {
           db={db}
           setDb={setDb}
           onClose={() => setShowUserMgmt(false)}
-          notify={notify}
-        />
-      )}
-
-      {/* Supabase Cloud Sync Modal */}
-      {showSupabaseModal && (
-        <SupabaseSyncModal
-          db={db}
-          setDb={setDb}
-          onClose={() => setShowSupabaseModal(false)}
           notify={notify}
         />
       )}

@@ -1,4 +1,3 @@
-import React from "react";
 import { CheckCircle2, AlertTriangle, AlertCircle, Info, X } from "lucide-react";
 
 export function ToastContainer({ toasts, onDismiss }) {
