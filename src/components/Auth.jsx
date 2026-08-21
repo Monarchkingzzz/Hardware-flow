@@ -137,62 +137,70 @@ export function LoginScreen({ db, onLogin, onForgotPassword, notify, theme, onTo
     <div
       style={{
         minHeight: "100vh",
+        width: "100%",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
         background: "var(--bg)",
-        padding: "20px 16px",
+        padding: "24px 16px",
+        boxSizing: "border-box",
         position: "relative",
       }}
     >
-      {/* Theme toggle on login screen */}
+      {/* Theme toggle on login screen (fixed top-right) */}
       <button
+        type="button"
         onClick={onToggleTheme}
         className="hf-btn hf-btn-ghost"
         style={{
-          position: "absolute",
-          top: 20,
-          right: 20,
-          padding: "8px 12px",
+          position: "fixed",
+          top: 18,
+          right: 18,
+          padding: "8px 14px",
           borderRadius: 10,
+          zIndex: 100,
+          boxShadow: "var(--shadow-sm)",
         }}
         title="Toggle Light/Dark Theme"
       >
         {theme === "dark" ? <Sun size={16} color="#FBBF24" /> : <Moon size={16} color="#4B5563" />}
-        <span style={{ fontSize: 12 }}>{theme === "dark" ? "Light Mode" : "Dark Mode"}</span>
+        <span style={{ fontSize: 12, fontWeight: 600 }}>{theme === "dark" ? "Light Mode" : "Dark Mode"}</span>
       </button>
 
+      {/* Main Centered Login Box */}
       <div
         className="hf-card"
         style={{
           width: 440,
-          maxWidth: "94vw",
-          padding: "32px 28px",
+          maxWidth: "100%",
+          padding: "36px 30px",
           boxShadow: "var(--shadow-lg)",
+          boxSizing: "border-box",
+          margin: "auto",
         }}
       >
-        {/* Logo & Header */}
-        <div style={{ textAlign: "center", marginBottom: 24 }}>
+        {/* Logo & Brand Header */}
+        <div style={{ textAlign: "center", marginBottom: 26 }}>
           <div
             style={{
-              width: 48,
-              height: 48,
+              width: 52,
+              height: 52,
               borderRadius: 14,
               background: "linear-gradient(155deg, #C7573A, var(--rust-dark))",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              margin: "0 auto 12px",
-              boxShadow: "0 6px 16px -4px rgba(193, 80, 47, 0.6)",
+              margin: "0 auto 14px",
+              boxShadow: "0 8px 20px -4px rgba(193, 80, 47, 0.55)",
             }}
           >
-            <ShieldCheck size={26} color="#fff" />
+            <ShieldCheck size={28} color="#fff" />
           </div>
-          <div className="disp" style={{ fontSize: 28, fontWeight: 800, letterSpacing: "0.02em" }}>
+          <div className="disp" style={{ fontSize: 30, fontWeight: 800, letterSpacing: "0.02em" }}>
             HARDWARE<span style={{ color: "var(--rust)" }}>FLOW</span>
           </div>
-          <div style={{ color: "var(--ink-soft)", fontSize: 13, marginTop: 4 }}>
+          <div style={{ color: "var(--ink-soft)", fontSize: 13.5, marginTop: 4 }}>
             Enterprise Hardware POS & Ledger System
           </div>
         </div>
@@ -204,9 +212,9 @@ export function LoginScreen({ db, onLogin, onForgotPassword, notify, theme, onTo
               border: "1px solid var(--amber)",
               color: "var(--amber)",
               padding: "12px 14px",
-              borderRadius: 9,
+              borderRadius: 10,
               fontSize: 13,
-              marginBottom: 16,
+              marginBottom: 18,
               display: "flex",
               alignItems: "center",
               gap: 10,
@@ -224,10 +232,10 @@ export function LoginScreen({ db, onLogin, onForgotPassword, notify, theme, onTo
               background: "var(--red-tint)",
               border: "1px solid var(--red)",
               color: "var(--red)",
-              padding: "10px 14px",
-              borderRadius: 9,
+              padding: "11px 14px",
+              borderRadius: 10,
               fontSize: 13,
-              marginBottom: 16,
+              marginBottom: 18,
               display: "flex",
               alignItems: "center",
               gap: 8,
@@ -239,14 +247,14 @@ export function LoginScreen({ db, onLogin, onForgotPassword, notify, theme, onTo
         ) : null}
 
         <form onSubmit={handleSubmit}>
-          <div style={{ marginBottom: 14 }}>
-            <div className="hf-kpi-label" style={{ marginBottom: 4 }}>Username / Phone</div>
+          <div style={{ marginBottom: 15 }}>
+            <div className="hf-kpi-label" style={{ marginBottom: 4 }}>Username or Phone</div>
             <div style={{ position: "relative" }}>
-              <User size={16} style={{ position: "absolute", left: 11, top: 11, color: "var(--ink-soft)" }} />
+              <User size={16} style={{ position: "absolute", left: 12, top: 13, color: "var(--ink-soft)" }} />
               <input
                 className="hf-input"
-                style={{ paddingLeft: 34 }}
-                placeholder="Enter your assigned username"
+                style={{ paddingLeft: 36 }}
+                placeholder="e.g. owner, cashier, or phone"
                 value={username}
                 onChange={handleUsernameChange}
                 disabled={lockoutSeconds > 0 || isSubmitting}
@@ -255,7 +263,7 @@ export function LoginScreen({ db, onLogin, onForgotPassword, notify, theme, onTo
             </div>
           </div>
 
-          <div style={{ marginBottom: 18 }}>
+          <div style={{ marginBottom: 20 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
               <div className="hf-kpi-label">Password</div>
               <button
@@ -267,11 +275,11 @@ export function LoginScreen({ db, onLogin, onForgotPassword, notify, theme, onTo
               </button>
             </div>
             <div style={{ position: "relative" }}>
-              <KeyRound size={16} style={{ position: "absolute", left: 11, top: 11, color: "var(--ink-soft)" }} />
+              <KeyRound size={16} style={{ position: "absolute", left: 12, top: 13, color: "var(--ink-soft)" }} />
               <input
                 className="hf-input"
                 type={showPassword ? "text" : "password"}
-                style={{ paddingLeft: 34, paddingRight: 36 }}
+                style={{ paddingLeft: 36, paddingRight: 40 }}
                 placeholder="Enter account password"
                 value={password}
                 onChange={e => { setPassword(e.target.value); setError(""); }}
@@ -288,7 +296,7 @@ export function LoginScreen({ db, onLogin, onForgotPassword, notify, theme, onTo
                   border: "none",
                   cursor: "pointer",
                   color: "var(--ink-soft)",
-                  padding: 2,
+                  padding: 4,
                 }}
               >
                 {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -300,7 +308,7 @@ export function LoginScreen({ db, onLogin, onForgotPassword, notify, theme, onTo
             type="submit"
             className="hf-btn hf-btn-primary"
             disabled={lockoutSeconds > 0 || isSubmitting}
-            style={{ width: "100%", justifyContent: "center", padding: "12px", fontSize: 14, fontWeight: 700 }}
+            style={{ width: "100%", justifyContent: "center", padding: "13px", fontSize: 14.5, fontWeight: 700, borderRadius: 10 }}
           >
             {isSubmitting ? "Authenticating..." : (
               <>
@@ -309,6 +317,39 @@ export function LoginScreen({ db, onLogin, onForgotPassword, notify, theme, onTo
             )}
           </button>
         </form>
+
+        {/* Demo Fast Login Pills */}
+        <div style={{ marginTop: 22, paddingTop: 18, borderTop: "1px solid var(--line)", textAlign: "center" }}>
+          <div style={{ fontSize: 11, color: "var(--ink-soft)", textTransform: "uppercase", fontWeight: 700, letterSpacing: "0.05em", marginBottom: 8 }}>
+            Quick Sign In
+          </div>
+          <div style={{ display: "flex", gap: 6, justifyContent: "center", flexWrap: "wrap" }}>
+            <button
+              type="button"
+              className="hf-btn hf-btn-ghost"
+              style={{ fontSize: 11.5, padding: "5px 10px", borderRadius: 8 }}
+              onClick={() => { setUsername("owner"); setPassword("admin123"); setError(""); }}
+            >
+              👑 Owner
+            </button>
+            <button
+              type="button"
+              className="hf-btn hf-btn-ghost"
+              style={{ fontSize: 11.5, padding: "5px 10px", borderRadius: 8 }}
+              onClick={() => { setUsername("cashier"); setPassword("cashier123"); setError(""); }}
+            >
+              🛒 Cashier
+            </button>
+            <button
+              type="button"
+              className="hf-btn hf-btn-ghost"
+              style={{ fontSize: 11.5, padding: "5px 10px", borderRadius: 8 }}
+              onClick={() => { setUsername("store"); setPassword("store123"); setError(""); }}
+            >
+              📦 Storekeeper
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

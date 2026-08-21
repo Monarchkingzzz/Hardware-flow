@@ -1393,23 +1393,41 @@ function daysSinceLastActivity(db, customerId) {
 }
 function supplierOutstanding(db, supplierId) {
   let total = 0;
-  db.products.filter(p => p.supplierId === supplierId).forEach(p => {
+  (db.products || []).filter(p => p.supplierId === supplierId).forEach(p => {
     (p.history || []).forEach(h => {
-      if (h.action === "Received") total += h.qty * (p.buyPrice / (p.conversionFactor || 1));
+      if (h.action === "Received") {
+        const factor = Number(p.conversionFactor) > 0 ? Number(p.conversionFactor) : 1;
+        const unitCost = Number(p.buyPrice) > 0 ? (Number(p.buyPrice) / factor) : 0;
+        total += (Number(h.qty) || 0) * unitCost;
+      }
     });
   });
-  const supplier = db.suppliers.find(s => s.id === supplierId);
-  const paid = (supplier?.payments || []).reduce((a, x) => a + x.amount, 0);
-  return Math.max(0, total - paid);
+
+  const supplier = (db.suppliers || []).find(s => s.id === supplierId);
+  const paidFromSupplier = (supplier?.payments || []).reduce((a, x) => a + (Number(x.amount) || 0), 0);
+
+  // Also include any payments in expenses that were recorded for this supplier
+  const linkedExpenseIds = new Set((supplier?.payments || []).map(p => p.expenseId || p.id).filter(Boolean));
+  const paidFromExpenses = (db.expenses || [])
+    .filter(e => e.category === "Supplier Payment" && e.supplierId === supplierId && !linkedExpenseIds.has(e.id))
+    .reduce((a, e) => a + (Number(e.amount) || 0), 0);
+
+  const totalPaid = paidFromSupplier + paidFromExpenses;
+  return Math.max(0, Math.round(total - totalPaid));
 }
+
 function supplierTotalPurchases(db, supplierId) {
   let total = 0;
-  db.products.filter(p => p.supplierId === supplierId).forEach(p => {
+  (db.products || []).filter(p => p.supplierId === supplierId).forEach(p => {
     (p.history || []).forEach(h => {
-      if (h.action === "Received") total += h.qty * (p.buyPrice / (p.conversionFactor || 1));
+      if (h.action === "Received") {
+        const factor = Number(p.conversionFactor) > 0 ? Number(p.conversionFactor) : 1;
+        const unitCost = Number(p.buyPrice) > 0 ? (Number(p.buyPrice) / factor) : 0;
+        total += (Number(h.qty) || 0) * unitCost;
+      }
     });
   });
-  return total;
+  return Math.round(total);
 }
 
 /* ================= POINT OF SALE (POS) ================= */
@@ -3260,97 +3278,329 @@ function Receiving({ db, setDb, notify, currentUser }) {
 /* ================= SUPPLIERS & AUTOMATED EXPENSES ================= */
 function Suppliers({ db, setDb, notify, currentUser }) {
   const [selected, setSelected] = useState(null);
-  const suppliersWithBal = db.suppliers.map(s => ({
-    ...s,
-    total: supplierTotalPurchases(db, s.id),
-    outstanding: supplierOutstanding(db, s.id)
-  }));
+  const [creating, setCreating] = useState(false);
+
+  const suppliersWithBal = (db.suppliers || []).map(s => {
+    const totalPurchases = supplierTotalPurchases(db, s.id);
+    const outstanding = supplierOutstanding(db, s.id);
+    const paidFromSupplier = (s.payments || []).reduce((a, p) => a + (Number(p.amount) || 0), 0);
+    const linkedExpenseIds = new Set((s.payments || []).map(p => p.expenseId || p.id).filter(Boolean));
+    const paidFromExpenses = (db.expenses || [])
+      .filter(e => e.category === "Supplier Payment" && e.supplierId === s.id && !linkedExpenseIds.has(e.id))
+      .reduce((a, e) => a + (Number(e.amount) || 0), 0);
+    const totalPaid = paidFromSupplier + paidFromExpenses;
+
+    return {
+      ...s,
+      total: totalPurchases,
+      paid: totalPaid,
+      outstanding: outstanding,
+    };
+  });
+
   const active = selected ? suppliersWithBal.find(s => s.id === selected) : null;
 
-  function recordPayment(supplierId, amount) {
-    const supp = db.suppliers.find(s => s.id === supplierId);
+  const totalAllPurchases = suppliersWithBal.reduce((a, s) => a + s.total, 0);
+  const totalAllPaid = suppliersWithBal.reduce((a, s) => a + s.paid, 0);
+  const totalAllOutstanding = suppliersWithBal.reduce((a, s) => a + s.outstanding, 0);
+
+  function recordPayment(supplierId, amount, paymentMethod = "mpesa", reference = "") {
+    const supp = (db.suppliers || []).find(s => s.id === supplierId);
     const today = todayISO(0);
     const timeStr = new Date().toTimeString().slice(0, 5);
     const operator = currentUser?.name || "Owner";
+    const payId = uid("SPAY");
+    const expId = uid("EXP");
+
+    const paymentEntry = {
+      id: payId,
+      expenseId: expId,
+      date: today,
+      time: timeStr,
+      amount: Number(amount),
+      method: paymentMethod,
+      reference: reference.trim(),
+      user: operator,
+    };
 
     const expenseEntry = {
-      id: uid("EXP"),
+      id: expId,
       date: today,
       category: "Supplier Payment",
       amount: Number(amount),
-      description: `Payment to supplier: ${supp?.name}`,
-      payment: "mpesa",
+      description: `Payment to supplier: ${supp?.name || 'Supplier'} (${paymentMethod.toUpperCase()}${reference.trim() ? ' - ' + reference.trim() : ''})`,
+      payment: paymentMethod === "bank" ? "other" : paymentMethod,
       supplierId: supplierId,
     };
 
     setDb(prev => ({
       ...prev,
-      suppliers: prev.suppliers.map(s => s.id === supplierId ? {
+      suppliers: (prev.suppliers || []).map(s => s.id === supplierId ? {
         ...s,
-        payments: [...(s.payments || []), { date: today, amount: Number(amount) }]
+        payments: [paymentEntry, ...(s.payments || [])]
       } : s),
-      expenses: [expenseEntry, ...prev.expenses],
+      expenses: [expenseEntry, ...(prev.expenses || [])],
       auditLog: [
         {
           id: uid("LOG"),
           time: `${today} ${timeStr}`,
           user: operator,
-          role: "Owner",
+          role: currentUser?.role || "Owner",
           category: "Supplier Payment",
-          action: `Paid supplier: ${supp?.name}`,
-          detail: `${fmt(amount)} (logged to expenses)`,
-          target: supp?.name,
+          action: `Paid supplier: ${supp?.name || 'Supplier'}`,
+          detail: `${fmt(amount)} via ${paymentMethod.toUpperCase()} (logged to expenses & ledger)`,
+          target: supp?.name || 'Supplier',
         },
-        ...prev.auditLog
+        ...(prev.auditLog || [])
       ],
     }));
 
-    notify("success", "Supplier Payment Recorded", `Paid ${fmt(amount)} to ${supp?.name}. Automatically reflected as expense.`);
+    notify("success", "Supplier Payment Recorded", `Paid ${fmt(amount)} to ${supp?.name || 'Supplier'}. Balance updated.`);
+  }
+
+  function clearBalance(supplierId) {
+    const supp = (db.suppliers || []).find(s => s.id === supplierId);
+    const bal = supplierOutstanding(db, supplierId);
+    if (bal <= 0) {
+      notify("info", "Balance Already Zero", `${supp?.name || 'Supplier'} has no outstanding debt.`);
+      return;
+    }
+
+    if (!confirm(`Are you sure you want to clear the entire outstanding balance (${fmt(bal)}) for ${supp?.name || 'this supplier'}? This will record a settlement payment in your ledger.`)) {
+      return;
+    }
+
+    recordPayment(supplierId, bal, "mpesa", "Full Balance Settlement");
+  }
+
+  function deletePayment(supplierId, paymentId) {
+    const supp = (db.suppliers || []).find(s => s.id === supplierId);
+    const targetPayment = (supp?.payments || []).find(p => p.id === paymentId);
+    if (!targetPayment) return;
+
+    if (!confirm(`Are you sure you want to undo / delete this payment of ${fmt(targetPayment.amount)}? This will restore the supplier's outstanding balance.`)) {
+      return;
+    }
+
+    const linkedExpenseId = targetPayment.expenseId;
+
+    setDb(prev => ({
+      ...prev,
+      suppliers: (prev.suppliers || []).map(s => s.id === supplierId ? {
+        ...s,
+        payments: (s.payments || []).filter(p => p.id !== paymentId)
+      } : s),
+      expenses: linkedExpenseId ? (prev.expenses || []).filter(e => e.id !== linkedExpenseId) : prev.expenses,
+      auditLog: [
+        {
+          id: uid("LOG"),
+          time: `${todayISO(0)} ${new Date().toTimeString().slice(0, 5)}`,
+          user: currentUser?.name || "Owner",
+          role: currentUser?.role || "Owner",
+          category: "Supplier Payment Undo",
+          action: `Undid supplier payment of ${fmt(targetPayment.amount)} for ${supp?.name || 'Supplier'}`,
+          detail: `Deleted payment ID ${paymentId}`,
+          target: supp?.name || 'Supplier',
+        },
+        ...(prev.auditLog || [])
+      ]
+    }));
+
+    notify("warning", "Payment Undone", `Removed payment of ${fmt(targetPayment.amount)}. Supplier balance updated.`);
+  }
+
+  function handleSaveNewSupplier(newSupp) {
+    setDb(prev => ({
+      ...prev,
+      suppliers: [newSupp, ...(prev.suppliers || [])],
+      auditLog: [
+        {
+          id: uid("LOG"),
+          time: `${todayISO(0)} ${new Date().toTimeString().slice(0, 5)}`,
+          user: currentUser?.name || "Owner",
+          role: currentUser?.role || "Owner",
+          category: "Supplier Created",
+          action: `Added new supplier: ${newSupp.name}`,
+          detail: `Terms: ${newSupp.terms}, Phone: ${newSupp.phone || 'N/A'}`,
+          target: newSupp.name,
+        },
+        ...(prev.auditLog || [])
+      ]
+    }));
+    notify("success", "Supplier Added", `Registered ${newSupp.name} successfully.`);
+    setCreating(false);
   }
 
   return (
     <div>
-      <div className="disp" style={{ fontSize: 26, fontWeight: 700, marginBottom: 14 }}>Suppliers</div>
-      <div className="hf-card">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <div className="disp" style={{ fontSize: 26, fontWeight: 700 }}>Suppliers & Payables</div>
+          <div style={{ color: "var(--ink-soft)", fontSize: 13 }}>
+            Manage supplier accounts, track stock deliveries, and settle debts with automated expense recording.
+          </div>
+        </div>
+        <button className="hf-btn hf-btn-primary" onClick={() => setCreating(true)}>
+          <Plus size={15} /> Add Supplier
+        </button>
+      </div>
+
+      {/* Top Overview KPI Cards */}
+      <div className="hf-kpis-grid" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
+        <div className="hf-ticket" style={{ padding: "16px 18px", display: "flex", flexDirection: "column" }}>
+          <div className="hf-kpi-label">Total Purchases (All Time)</div>
+          <div className="mono" style={{ fontSize: 22, fontWeight: 700, marginTop: "auto", color: "var(--ink)" }}>
+            {fmt(totalAllPurchases)}
+          </div>
+        </div>
+        <div className="hf-ticket" style={{ padding: "16px 18px", display: "flex", flexDirection: "column" }}>
+          <div className="hf-kpi-label">Total Paid to Suppliers</div>
+          <div className="mono text-profit" style={{ fontSize: 22, fontWeight: 700, marginTop: "auto" }}>
+            {fmt(totalAllPaid)}
+          </div>
+        </div>
+        <div className="hf-ticket" style={{ padding: "16px 18px", display: "flex", flexDirection: "column", borderLeft: totalAllOutstanding > 0 ? "4px solid var(--red)" : "4px solid var(--green)" }}>
+          <div className="hf-kpi-label">Total Outstanding Debt</div>
+          <div className={`mono ${totalAllOutstanding > 0 ? "text-loss" : "text-profit"}`} style={{ fontSize: 22, fontWeight: 700, marginTop: "auto" }}>
+            {fmt(totalAllOutstanding)}
+          </div>
+        </div>
+      </div>
+
+      {/* Desktop Table View */}
+      <div className="hf-card hf-desktop-only">
         <table className="hf-table">
           <thead>
             <tr>
-              <th>Supplier</th>
-              <th>Terms</th>
+              <th>Supplier Name</th>
+              <th>Payment Terms</th>
               <th>Total Purchases</th>
-              <th>Paid</th>
+              <th>Total Paid</th>
               <th>Outstanding Balance</th>
+              <th>Status</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
             {suppliersWithBal.map(s => {
-              const paid = (s.payments || []).reduce((a, p) => a + p.amount, 0);
+              const isDue = s.outstanding > 0;
               return (
                 <tr key={s.id} style={{ cursor: "pointer" }} onClick={() => setSelected(s.id)}>
-                  <td style={{ fontWeight: 600 }}>{s.name}<div style={{ fontSize: 11, color: "var(--ink-soft)" }}>{s.phone}</div></td>
-                  <td>{s.terms}</td>
+                  <td>
+                    <div style={{ fontWeight: 700 }}>{s.name}</div>
+                    <div style={{ fontSize: 11, color: "var(--ink-soft)" }}>{s.phone || "No phone registered"}</div>
+                  </td>
+                  <td>{s.terms || "Net 30"}</td>
                   <td className="mono">{fmt(s.total)}</td>
-                  <td className="mono text-profit">{fmt(paid)}</td>
-                  <td className={`mono ${s.outstanding > 0 ? "text-loss" : "text-profit"}`} style={{ fontWeight: 700 }}>
+                  <td className="mono text-profit" style={{ fontWeight: 600 }}>{fmt(s.paid)}</td>
+                  <td className={`mono ${isDue ? "text-loss" : "text-profit"}`} style={{ fontWeight: 700, fontSize: 14.5 }}>
                     {fmt(s.outstanding)}
                   </td>
-                  <td><ChevronRight size={15} color="var(--ink-soft)" /></td>
+                  <td>
+                    <Pill tone={isDue ? "red" : "green"}>
+                      {isDue ? "BALANCE DUE" : "SETTLED"}
+                    </Pill>
+                  </td>
+                  <td>
+                    <ChevronRight size={15} color="var(--ink-soft)" />
+                  </td>
                 </tr>
               );
             })}
+            {suppliersWithBal.length === 0 && (
+              <tr>
+                <td colSpan={7} style={{ textAlign: "center", padding: 28, color: "var(--ink-soft)" }}>
+                  No suppliers registered yet. Click "Add Supplier" above.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
-      {active && <SupplierDrawer supplier={active} db={db} onPay={recordPayment} onClose={() => setSelected(null)} notify={notify} />}
+
+      {/* Mobile Card View */}
+      <div className="hf-mobile-only" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {suppliersWithBal.map(s => {
+          const isDue = s.outstanding > 0;
+          return (
+            <div
+              key={s.id}
+              className="hf-ticket"
+              style={{ padding: "14px 16px", cursor: "pointer" }}
+              onClick={() => setSelected(s.id)}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 15 }}>{s.name}</div>
+                  <div style={{ fontSize: 12, color: "var(--ink-soft)" }}>{s.phone || "No phone"} · {s.terms}</div>
+                </div>
+                <Pill tone={isDue ? "red" : "green"}>
+                  {isDue ? "DUE" : "SETTLED"}
+                </Pill>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 8, paddingTop: 8, borderTop: "1px solid var(--line)" }}>
+                <div>
+                  <div className="hf-kpi-label">Paid</div>
+                  <div className="mono text-profit" style={{ fontWeight: 600, fontSize: 13 }}>{fmt(s.paid)}</div>
+                </div>
+                <div>
+                  <div className="hf-kpi-label">Outstanding</div>
+                  <div className={`mono ${isDue ? "text-loss" : "text-profit"}`} style={{ fontWeight: 700, fontSize: 14 }}>
+                    {fmt(s.outstanding)}
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Supplier Drawer */}
+      {active && (
+        <SupplierDrawer
+          supplier={active}
+          db={db}
+          onPay={recordPayment}
+          onClearBalance={clearBalance}
+          onDeletePayment={deletePayment}
+          onClose={() => setSelected(null)}
+          notify={notify}
+        />
+      )}
+
+      {/* New Supplier Modal */}
+      {creating && (
+        <NewSupplierModal
+          onCancel={() => setCreating(false)}
+          onSave={handleSaveNewSupplier}
+          notify={notify}
+        />
+      )}
     </div>
   );
 }
 
-function SupplierDrawer({ supplier, db, onPay, onClose, notify }) {
+function SupplierDrawer({ supplier, db, onPay, onClearBalance, onDeletePayment, onClose, notify }) {
   const [amount, setAmount] = useState("");
-  const products = db.products.filter(p => p.supplierId === supplier.id);
-  const paid = (supplier.payments || []).reduce((a, p) => a + p.amount, 0);
+  const [paymentMethod, setPaymentMethod] = useState("mpesa"); // "mpesa" | "cash" | "bank"
+  const [reference, setReference] = useState("");
+
+  const products = (db.products || []).filter(p => p.supplierId === supplier.id);
+  const rawPayments = supplier.payments || [];
+  const linkedExpensePayments = (db.expenses || [])
+    .filter(e => e.category === "Supplier Payment" && e.supplierId === supplier.id && !rawPayments.some(p => p.expenseId === e.id || p.id === e.id))
+    .map(e => ({
+      id: e.id,
+      expenseId: e.id,
+      date: e.date,
+      time: "",
+      amount: e.amount,
+      method: e.payment || "mpesa",
+      reference: e.description || "Cashbook Expense",
+      user: "Owner",
+    }));
+
+  const allPayments = [...rawPayments, ...linkedExpensePayments];
 
   function handlePay() {
     const val = Number(amount);
@@ -3358,41 +3608,270 @@ function SupplierDrawer({ supplier, db, onPay, onClose, notify }) {
       notify("error", "Invalid Amount", "Please enter a valid payment amount.");
       return;
     }
-    onPay(supplier.id, val);
+    onPay(supplier.id, val, paymentMethod, reference);
     setAmount("");
+    setReference("");
+  }
+
+  function handleQuickPayFull() {
+    if (supplier.outstanding <= 0) {
+      notify("info", "Settled", "This supplier has no outstanding balance.");
+      return;
+    }
+    setAmount(String(supplier.outstanding));
   }
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(20,24,30,0.5)", display: "flex", justifyContent: "flex-end", zIndex: 50 }} onClick={onClose}>
-      <div className="hf-card" style={{ width: 420, maxWidth: "92vw", height: "100%", borderRadius: 0, overflowY: "auto", padding: 24 }} onClick={e => e.stopPropagation()}>
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
-          <div className="disp" style={{ fontSize: 22, fontWeight: 700 }}>{supplier.name}</div>
-          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer" }}><X size={18} /></button>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 18 }}>
-          <Stat label="Total Purchases" value={fmt(supplier.total)} />
-          <Stat label="Total Paid" value={fmt(paid)} />
-          <Stat label="Outstanding Balance" value={fmt(supplier.outstanding)} />
-          <Stat label="Payment Terms" value={supplier.terms} />
-        </div>
-
-        <div style={{ background: "var(--surface-hover)", padding: 12, borderRadius: 10, marginBottom: 18 }}>
-          <div className="hf-kpi-label" style={{ marginBottom: 6 }}>Record Payment to Supplier</div>
-          <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginBottom: 8 }}>
-            Recording this payment will automatically reflect as an Expense on your Dashboard.
+    <div style={{ position: "fixed", inset: 0, background: "rgba(20,24,30,0.6)", backdropFilter: "blur(2px)", display: "flex", justifyContent: "flex-end", zIndex: 1100 }} onClick={onClose}>
+      <div
+        className="hf-card hf-modal-card"
+        style={{ width: 480, maxWidth: "96vw", height: "100%", borderRadius: 0, overflowY: "auto", padding: "24px 20px", display: "flex", flexDirection: "column" }}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+          <div>
+            <div className="disp" style={{ fontSize: 24, fontWeight: 700 }}>{supplier.name}</div>
+            <div style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>
+              {supplier.phone || "No phone"} · {supplier.terms || "Net 30"}
+            </div>
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <input className="hf-input" type="number" placeholder="Amount (KSh)" value={amount} onChange={e => setAmount(e.target.value)} />
-            <button className="hf-btn hf-btn-primary" onClick={handlePay}>Record</button>
-          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><X size={20} /></button>
         </div>
 
-        <div className="disp" style={{ fontSize: 15, fontWeight: 700, marginBottom: 8 }}>Products Supplied</div>
-        {products.map(p => (
-          <div key={p.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "6px 0", borderBottom: "1px solid var(--line)" }}>
-            <span>{p.name}</span><span className="mono">{fmt(p.buyPrice)}/{p.purchaseUnit}</span>
+        {/* Metrics Grid */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+          <div className="hf-ticket" style={{ padding: "12px 14px" }}>
+            <div className="hf-kpi-label">Outstanding Balance</div>
+            <div className={`mono ${supplier.outstanding > 0 ? "text-loss" : "text-profit"}`} style={{ fontSize: 20, fontWeight: 700 }}>
+              {fmt(supplier.outstanding)}
+            </div>
           </div>
-        ))}
+          <div className="hf-ticket" style={{ padding: "12px 14px" }}>
+            <div className="hf-kpi-label">Total Paid to Date</div>
+            <div className="mono text-profit" style={{ fontSize: 20, fontWeight: 700 }}>
+              {fmt(supplier.paid)}
+            </div>
+          </div>
+          <div className="hf-ticket" style={{ padding: "12px 14px" }}>
+            <div className="hf-kpi-label">Total Purchases</div>
+            <div className="mono" style={{ fontSize: 16, fontWeight: 600 }}>
+              {fmt(supplier.total)}
+            </div>
+          </div>
+          <div className="hf-ticket" style={{ padding: "12px 14px" }}>
+            <div className="hf-kpi-label">Payment Terms</div>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>
+              {supplier.terms || "Net 30"}
+            </div>
+          </div>
+        </div>
+
+        {/* Quick Settlement Actions */}
+        {supplier.outstanding > 0 && (
+          <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+            <button
+              type="button"
+              className="hf-btn hf-btn-ghost"
+              style={{ flex: 1, justifyContent: "center", fontSize: 12.5, borderColor: "var(--rust)", color: "var(--rust)" }}
+              onClick={handleQuickPayFull}
+            >
+              Fill Full Balance ({fmt(supplier.outstanding)})
+            </button>
+            <button
+              type="button"
+              className="hf-btn hf-btn-ghost"
+              style={{ flex: 1, justifyContent: "center", fontSize: 12.5, borderColor: "var(--green)", color: "var(--green)" }}
+              onClick={() => onClearBalance(supplier.id)}
+            >
+              ✓ Clear All to KSh 0
+            </button>
+          </div>
+        )}
+
+        {/* Record Payment Form Box */}
+        <div style={{ background: "var(--surface-hover)", border: "1.5px solid var(--line)", padding: "16px 14px", borderRadius: 12, marginBottom: 20 }}>
+          <div className="hf-kpi-label" style={{ marginBottom: 6, fontWeight: 700 }}>Record Payment to Supplier</div>
+          <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 12 }}>
+            Payments directly deduct from the supplier's outstanding balance and automatically reflect in your daily Cashbook & Expenses.
+          </div>
+
+          <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+            {[
+              { key: "mpesa", label: "M-Pesa" },
+              { key: "cash", label: "Cash" },
+              { key: "bank", label: "Bank Transfer" },
+            ].map(m => (
+              <button
+                key={m.key}
+                type="button"
+                className="hf-btn"
+                style={{
+                  flex: 1,
+                  justifyContent: "center",
+                  fontSize: 12,
+                  padding: "6px 8px",
+                  background: paymentMethod === m.key ? "var(--rust)" : "var(--surface)",
+                  color: paymentMethod === m.key ? "#fff" : "var(--ink)",
+                  border: paymentMethod === m.key ? "1.5px solid var(--rust-dark)" : "1.5px solid var(--line)",
+                }}
+                onClick={() => setPaymentMethod(m.key)}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <input
+              className="hf-input"
+              type="number"
+              placeholder="Amount to pay (KSh)"
+              value={amount}
+              onChange={e => setAmount(e.target.value)}
+            />
+            <input
+              className="hf-input"
+              placeholder="Reference / Notes (optional, e.g. MPESA-QW9281)"
+              value={reference}
+              onChange={e => setReference(e.target.value)}
+            />
+            <button
+              type="button"
+              className="hf-btn hf-btn-primary"
+              style={{ width: "100%", justifyContent: "center", padding: "10px", marginTop: 4 }}
+              onClick={handlePay}
+              disabled={!amount || Number(amount) <= 0}
+            >
+              Confirm & Deduct Balance
+            </button>
+          </div>
+        </div>
+
+        {/* Payment History Ledger */}
+        <div style={{ marginBottom: 20 }}>
+          <div className="disp" style={{ fontSize: 16, fontWeight: 700, marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span>Payment History & Receipts</span>
+            <span style={{ fontSize: 12, color: "var(--ink-soft)", fontWeight: 500 }}>{allPayments.length} recorded</span>
+          </div>
+
+          {allPayments.length === 0 ? (
+            <div style={{ color: "var(--ink-soft)", fontSize: 12.5, padding: "12px 0", textAlign: "center", background: "var(--surface-hover)", borderRadius: 8 }}>
+              No payments recorded for this supplier yet.
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 220, overflowY: "auto" }}>
+              {allPayments.map(p => (
+                <div
+                  key={p.id}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "8px 10px",
+                    background: "var(--surface-hover)",
+                    border: "1px solid var(--line)",
+                    borderRadius: 8,
+                    fontSize: 12.5,
+                  }}
+                >
+                  <div>
+                    <div style={{ fontWeight: 600 }}>{niceDate(p.date)} {p.time && `· ${p.time}`}</div>
+                    <div style={{ fontSize: 11, color: "var(--ink-soft)" }}>
+                      via {(p.method || 'MPESA').toUpperCase()} {p.reference && `(${p.reference})`}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span className="mono text-profit" style={{ fontWeight: 700, fontSize: 13.5 }}>
+                      {fmt(p.amount)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onDeletePayment(supplier.id, p.id)}
+                      style={{ background: "none", border: "none", cursor: "pointer", color: "var(--red)", padding: 4 }}
+                      title="Undo / Delete this payment"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Products Supplied */}
+        <div>
+          <div className="disp" style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>Products Supplied ({products.length})</div>
+          {products.map(p => (
+            <div key={p.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "6px 0", borderBottom: "1px solid var(--line)" }}>
+              <span>{p.name}</span>
+              <span className="mono">{fmt(p.buyPrice)} / {p.purchaseUnit}</span>
+            </div>
+          ))}
+          {products.length === 0 && (
+            <div style={{ color: "var(--ink-soft)", fontSize: 12.5 }}>No catalog items linked to this supplier yet.</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NewSupplierModal({ onCancel, onSave, notify }) {
+  const [form, setForm] = useState({
+    name: "",
+    phone: "",
+    terms: "Net 30",
+  });
+
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  function handleSubmit() {
+    if (!form.name.trim()) {
+      notify("error", "Missing Information", "Please enter the supplier name.");
+      return;
+    }
+    const newSupp = {
+      id: uid("SUPP"),
+      name: form.name.trim(),
+      phone: form.phone.trim(),
+      terms: form.terms,
+      payments: [],
+    };
+    onSave(newSupp);
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(20,24,30,0.6)", backdropFilter: "blur(2px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1200 }} onClick={onCancel}>
+      <div className="hf-card hf-modal-card" style={{ width: 440, maxWidth: "94vw", padding: "22px 20px" }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <div className="disp" style={{ fontSize: 20, fontWeight: 700 }}>Add New Supplier</div>
+          <button onClick={onCancel} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><X size={18} /></button>
+        </div>
+
+        <Field label="Supplier / Company Name *">
+          <input className="hf-input" placeholder="e.g. Bamburi Cement Ltd, Crown Paints" value={form.name} onChange={e => set("name", e.target.value)} autoFocus />
+        </Field>
+        <div style={{ height: 10 }} />
+        <Field label="Phone / Contact Number">
+          <input className="hf-input" placeholder="e.g. 0722 000 111" value={form.phone} onChange={e => set("phone", e.target.value)} />
+        </Field>
+        <div style={{ height: 10 }} />
+        <Field label="Payment Terms">
+          <select className="hf-input" value={form.terms} onChange={e => set("terms", e.target.value)}>
+            <option value="Cash on delivery">Cash on delivery (COD)</option>
+            <option value="Net 7">Net 7 Days</option>
+            <option value="Net 14">Net 14 Days</option>
+            <option value="Net 30">Net 30 Days</option>
+            <option value="Net 60">Net 60 Days</option>
+          </select>
+        </Field>
+
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 18 }}>
+          <button className="hf-btn hf-btn-ghost" onClick={onCancel}>Cancel</button>
+          <button className="hf-btn hf-btn-primary" onClick={handleSubmit} disabled={!form.name.trim()}>Save Supplier</button>
+        </div>
       </div>
     </div>
   );
@@ -3796,34 +4275,65 @@ function Cashbook({ db, setDb, notify, currentUser }) {
   const netMovement = totalIn - totalOut;
 
   function addExpense(form) {
-    const exp = {
-      id: uid("EXP"),
-      date: today,
-      category: form.category,
-      amount: Number(form.amount),
-      description: form.description,
-      payment: form.payment
-    };
+    const expId = uid("EXP");
+    const todayStr = todayISO(0);
+    const timeStr = new Date().toTimeString().slice(0, 5);
     const operator = currentUser?.name || "Owner";
+    const amountVal = Number(form.amount) || 0;
 
-    setDb(prev => ({
-      ...prev,
-      expenses: [exp, ...prev.expenses],
-      auditLog: [
-        {
-          id: uid("LOG"),
-          time: today + " " + new Date().toTimeString().slice(0, 5),
-          user: operator,
-          role: "Owner",
-          category: "Expense",
-          action: `Recorded expense — ${form.category}`,
-          detail: `${fmt(exp.amount)} (${form.description || "No description"})`,
-          target: form.category,
-        },
-        ...prev.auditLog
-      ]
-    }));
-    notify("success", "Expense Recorded", `${form.category}: ${fmt(exp.amount)} saved.`);
+    const exp = {
+      id: expId,
+      date: todayStr,
+      category: form.category,
+      amount: amountVal,
+      description: form.description || (form.category === "Supplier Payment" ? `Payment to supplier: ${(db.suppliers || []).find(s => s.id === form.supplierId)?.name || 'Supplier'}` : "No description"),
+      payment: form.payment || "cash",
+      supplierId: form.supplierId || null,
+    };
+
+    setDb(prev => {
+      let updatedSuppliers = prev.suppliers || [];
+      if (form.category === "Supplier Payment" && form.supplierId) {
+        const supp = updatedSuppliers.find(s => s.id === form.supplierId);
+        updatedSuppliers = updatedSuppliers.map(s => s.id === form.supplierId ? {
+          ...s,
+          payments: [
+            {
+              id: uid("SPAY"),
+              expenseId: expId,
+              date: todayStr,
+              time: timeStr,
+              amount: amountVal,
+              method: form.payment || "cash",
+              reference: form.description || "Cashbook Expense Payment",
+              user: operator,
+            },
+            ...(s.payments || [])
+          ]
+        } : s);
+      }
+
+      return {
+        ...prev,
+        suppliers: updatedSuppliers,
+        expenses: [exp, ...(prev.expenses || [])],
+        auditLog: [
+          {
+            id: uid("LOG"),
+            time: `${todayStr} ${timeStr}`,
+            user: operator,
+            role: "Owner",
+            category: "Expense",
+            action: `Recorded expense — ${form.category}`,
+            detail: `${fmt(amountVal)} (${form.description || "No description"})`,
+            target: form.category,
+          },
+          ...(prev.auditLog || [])
+        ]
+      };
+    });
+
+    notify("success", "Expense Recorded", `${form.category}: ${fmt(amountVal)} saved.`);
     setShowExpense(false);
   }
 
@@ -3876,7 +4386,7 @@ function Cashbook({ db, setDb, notify, currentUser }) {
       <div className="disp" style={{ fontSize: 18, fontWeight: 700, margin: "24px 0 10px" }}>Expenses This Month by Category</div>
       <ExpenseSummary db={db} />
 
-      {showExpense && <NewExpenseModal onCancel={() => setShowExpense(false)} onSave={addExpense} notify={notify} />}
+      {showExpense && <NewExpenseModal db={db} onCancel={() => setShowExpense(false)} onSave={addExpense} notify={notify} />}
     </div>
   );
 }
@@ -3911,8 +4421,8 @@ function ExpenseSummary({ db }) {
   );
 }
 
-function NewExpenseModal({ onCancel, onSave, notify }) {
-  const [form, setForm] = useState({ category: "Transport", amount: "", description: "", payment: "cash" });
+function NewExpenseModal({ db, onCancel, onSave, notify }) {
+  const [form, setForm] = useState({ category: "Transport", amount: "", description: "", payment: "cash", supplierId: "" });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
   function handleSave() {
@@ -3920,27 +4430,64 @@ function NewExpenseModal({ onCancel, onSave, notify }) {
       notify("error", "Invalid Amount", "Please enter a valid expense amount.");
       return;
     }
+    if (form.category === "Supplier Payment" && !form.supplierId) {
+      notify("error", "Supplier Required", "Please select which supplier you are paying.");
+      return;
+    }
     onSave(form);
   }
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(20,24,30,0.6)", backdropFilter: "blur(2px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1200 }} onClick={onCancel}>
-      <div className="hf-card hf-modal-card" style={{ width: 420, maxWidth: "94vw", padding: "22px 20px" }} onClick={e => e.stopPropagation()}>
+      <div className="hf-card hf-modal-card" style={{ width: 440, maxWidth: "94vw", padding: "22px 20px" }} onClick={e => e.stopPropagation()}>
         <div className="disp" style={{ fontSize: 20, fontWeight: 700, marginBottom: 14 }}>Record Expense</div>
         <Field label="Category">
           <select className="hf-input" value={form.category} onChange={e => set("category", e.target.value)}>
             {["Transport", "Rent", "Salaries", "Electricity", "Repairs", "Supplier Payment", "Other"].map(c => <option key={c}>{c}</option>)}
           </select>
         </Field>
+
+        {form.category === "Supplier Payment" && (
+          <>
+            <div style={{ height: 10 }} />
+            <Field label="Select Supplier to Pay *">
+              <select
+                className="hf-input"
+                value={form.supplierId}
+                onChange={e => {
+                  const sId = e.target.value;
+                  const bal = sId ? supplierOutstanding(db, sId) : 0;
+                  setForm(f => ({
+                    ...f,
+                    supplierId: sId,
+                    amount: bal > 0 && (!f.amount || f.amount === "0") ? String(bal) : f.amount
+                  }));
+                }}
+              >
+                <option value="">Select supplier…</option>
+                {(db?.suppliers || []).map(s => {
+                  const bal = supplierOutstanding(db, s.id);
+                  return (
+                    <option key={s.id} value={s.id}>
+                      {s.name} {bal > 0 ? `(Owed: ${fmt(bal)})` : "(Settled: KSh 0)"}
+                    </option>
+                  );
+                })}
+              </select>
+            </Field>
+          </>
+        )}
+
         <div style={{ height: 10 }} />
         <Field label="Amount (KSh)"><input className="hf-input" type="number" placeholder="e.g. 2500" value={form.amount} onChange={e => set("amount", e.target.value)} /></Field>
         <div style={{ height: 10 }} />
-        <Field label="Description"><input className="hf-input" placeholder="e.g. Generator fuel, delivery fare" value={form.description} onChange={e => set("description", e.target.value)} /></Field>
+        <Field label="Description / Reference"><input className="hf-input" placeholder="e.g. Generator fuel, delivery fare, M-Pesa ref" value={form.description} onChange={e => set("description", e.target.value)} /></Field>
         <div style={{ height: 10 }} />
         <Field label="Payment Method">
           <select className="hf-input" value={form.payment} onChange={e => set("payment", e.target.value)}>
             <option value="cash">Cash</option>
             <option value="mpesa">M-Pesa</option>
+            <option value="bank">Bank Transfer</option>
           </select>
         </Field>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
@@ -4329,7 +4876,7 @@ export default function App() {
 
   if (loading || !db) {
     return (
-      <div className="hf-root" style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div className="hf-root" style={{ minHeight: "100vh", width: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
         <GlobalStyle theme={theme} />
         Loading HardwareFlow…
       </div>
@@ -4338,7 +4885,7 @@ export default function App() {
 
   if (!currentUser) {
     return (
-      <div className="hf-root">
+      <div className="hf-root hf-login-root" style={{ width: "100%", minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "var(--bg)" }}>
         <GlobalStyle theme={theme} />
         <ToastContainer toasts={toasts} onDismiss={dismissToast} />
         <LoginScreen
