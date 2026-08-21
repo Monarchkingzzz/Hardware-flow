@@ -68,54 +68,40 @@ function uid(prefix) {
   return prefix + "-" + Math.random().toString(36).slice(2, 8).toUpperCase();
 }
 
-/* ---------- Accurate Stock Valuation & Inventory Metrics Helpers ---------- */
+/* ---------- Single Unified Accurate Real-Time Stock Valuation Helper ---------- */
 function getProductUnitCost(p) {
   if (!p) return 0;
   const factor = Number(p.conversionFactor) > 0 ? Number(p.conversionFactor) : 1;
   const buy = Number(p.buyPrice) || 0;
-  return buy / factor;
+  if (buy > 0) return buy / factor;
+  return Number(p.sellPrice) || 0;
 }
 
-function getProductStockCost(p) {
+function getProductStockValue(p) {
   if (!p) return 0;
   const stock = Math.max(0, Number(p.stock) || 0);
   return stock * getProductUnitCost(p);
 }
 
-function getProductStockRetail(p) {
-  if (!p) return 0;
-  const stock = Math.max(0, Number(p.stock) || 0);
-  return stock * (Number(p.sellPrice) || 0);
-}
-
 function getInventoryMetrics(products = []) {
-  let totalStockCost = 0;
-  let totalStockRetail = 0;
+  let totalStockValue = 0;
   let totalUnits = 0;
   let lowStockCount = 0;
 
   products.forEach(p => {
     const stock = Math.max(0, Number(p.stock) || 0);
-    const unitCost = getProductUnitCost(p);
-    const sellPrice = Number(p.sellPrice) || 0;
+    const itemVal = getProductStockValue(p);
     totalUnits += stock;
-    totalStockCost += stock * unitCost;
-    totalStockRetail += stock * sellPrice;
+    totalStockValue += itemVal;
     if (stock <= (Number(p.minStock) || 0)) {
       lowStockCount += 1;
     }
   });
 
-  const potentialMargin = Math.max(0, totalStockRetail - totalStockCost);
-  const marginPct = totalStockRetail > 0 ? Math.round((potentialMargin / totalStockRetail) * 100) : 0;
-
   return {
     totalUnits,
     totalProducts: products.length,
-    totalStockCost,
-    totalStockRetail,
-    potentialMargin,
-    marginPct,
+    totalStockValue,
     lowStockCount,
   };
 }
@@ -493,7 +479,7 @@ const GlobalStyle = ({ theme }) => {
       /* Valuation Summary Banner */
       .hf-stock-banner {
         display: grid;
-        grid-template-columns: repeat(4, 1fr);
+        grid-template-columns: repeat(3, 1fr);
         gap: 12px;
         margin-bottom: 20px;
       }
@@ -925,33 +911,13 @@ function Dashboard({ db, role, notify }) {
       sub: "Pending supplier dues",
     },
     {
-      label: "Stock Cost Value",
-      value: fmt(inventoryMetrics.totalStockCost),
+      label: "Stock Value",
+      value: fmt(inventoryMetrics.totalStockValue),
       tone: "ink",
       ownerOnly: true,
       icon: Package,
-      rawVal: inventoryMetrics.totalStockCost,
-      sub: `${inventoryMetrics.totalUnits.toLocaleString()} units · Cost basis`,
-    },
-    {
-      label: "Retail Stock Value",
-      value: fmt(inventoryMetrics.totalStockRetail),
-      tone: "green",
-      ownerOnly: true,
-      icon: Package,
-      valColor: "var(--green)",
-      rawVal: inventoryMetrics.totalStockRetail,
-      sub: `${inventoryMetrics.totalProducts} active products · Sales value`,
-    },
-    {
-      label: "Locked Stock Profit",
-      value: "+" + fmt(inventoryMetrics.potentialMargin),
-      tone: "green",
-      ownerOnly: true,
-      icon: TrendingUp,
-      valColor: "var(--green)",
-      rawVal: inventoryMetrics.potentialMargin,
-      sub: `${inventoryMetrics.marginPct}% margin in stock`,
+      rawVal: inventoryMetrics.totalStockValue,
+      sub: `${inventoryMetrics.totalUnits.toLocaleString()} units · Live stock value`,
     },
   ];
 
@@ -2433,6 +2399,7 @@ function Inventory({ db, setDb, role, notify, currentUser }) {
         </div>
       </div>
 
+
       {/* Executive Real-Time Stock Valuation Banner */}
       <div className="hf-stock-banner">
         <div className="hf-ticket" style={{ padding: "14px 16px" }}>
@@ -2445,49 +2412,25 @@ function Inventory({ db, setDb, role, notify, currentUser }) {
           </div>
         </div>
 
-        {canSeeCost ? (
-          <div className="hf-ticket" style={{ padding: "14px 16px" }}>
-            <div className="hf-kpi-label">Total Stock Cost Value</div>
-            <div className="mono" style={{ fontSize: 21, fontWeight: 700, marginTop: 4, color: "var(--ink)" }}>
-              {fmt(metrics.totalStockCost)}
-            </div>
-            <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 2 }}>
-              Total inventory cost basis
-            </div>
-          </div>
-        ) : (
-          <div className="hf-ticket" style={{ padding: "14px 16px" }}>
-            <div className="hf-kpi-label">Low Stock Alerts</div>
-            <div className="mono" style={{ fontSize: 21, fontWeight: 700, marginTop: 4, color: metrics.lowStockCount > 0 ? "var(--red)" : "var(--green)" }}>
-              {metrics.lowStockCount} <span style={{ fontSize: 13, fontWeight: 500 }}>items</span>
-            </div>
-            <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 2 }}>
-              {metrics.lowStockCount > 0 ? "Replenishment required" : "All levels adequate"}
-            </div>
-          </div>
-        )}
-
         <div className="hf-ticket" style={{ padding: "14px 16px" }}>
-          <div className="hf-kpi-label">Total Retail Sales Value</div>
+          <div className="hf-kpi-label">Real-Time Stock Value</div>
           <div className="mono text-profit" style={{ fontSize: 21, fontWeight: 700, marginTop: 4 }}>
-            {fmt(metrics.totalStockRetail)}
+            {fmt(metrics.totalStockValue)}
           </div>
           <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 2 }}>
-            Expected retail revenue
+            Total inventory valuation
           </div>
         </div>
 
-        {canSeeCost && (
-          <div className="hf-ticket" style={{ padding: "14px 16px" }}>
-            <div className="hf-kpi-label">Locked Stock Profit</div>
-            <div className="mono text-profit" style={{ fontSize: 21, fontWeight: 700, marginTop: 4 }}>
-              +{fmt(metrics.potentialMargin)}
-            </div>
-            <div style={{ fontSize: 11, color: "var(--green)", marginTop: 2, fontWeight: 600 }}>
-              {metrics.marginPct}% potential gross margin
-            </div>
+        <div className="hf-ticket" style={{ padding: "14px 16px" }}>
+          <div className="hf-kpi-label">Low Stock Alerts</div>
+          <div className="mono" style={{ fontSize: 21, fontWeight: 700, marginTop: 4, color: metrics.lowStockCount > 0 ? "var(--red)" : "var(--green)" }}>
+            {metrics.lowStockCount} <span style={{ fontSize: 13, fontWeight: 500 }}>items</span>
           </div>
-        )}
+          <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 2 }}>
+            {metrics.lowStockCount > 0 ? "Replenishment required" : "All levels adequate"}
+          </div>
+        </div>
       </div>
 
       {/* Search Filter */}
@@ -2513,7 +2456,7 @@ function Inventory({ db, setDb, role, notify, currentUser }) {
               <th>Min Alert</th>
               {canSeeCost && <th>Buying Cost</th>}
               <th>Selling Price</th>
-              {canSeeCost && <th style={{ textAlign: "right" }}>Total Cost Value</th>}
+              <th style={{ textAlign: "right" }}>Stock Value</th>
               <th>Supplier</th>
               <th style={{ width: 40 }}></th>
             </tr>
@@ -2523,7 +2466,7 @@ function Inventory({ db, setDb, role, notify, currentUser }) {
               const low = (p.stock || 0) <= (p.minStock || 0);
               const supplier = db.suppliers.find(s => s.id === p.supplierId);
               const unitCost = getProductUnitCost(p);
-              const stockVal = getProductStockCost(p);
+              const stockVal = getProductStockValue(p);
 
               return (
                 <tr key={p.id} onClick={() => setSelected(p.id)} style={{ cursor: "pointer" }}>
@@ -2544,11 +2487,9 @@ function Inventory({ db, setDb, role, notify, currentUser }) {
                     </td>
                   )}
                   <td className="mono text-profit" style={{ fontWeight: 600 }}>{fmt(p.sellPrice)}</td>
-                  {canSeeCost && (
-                    <td className="mono" style={{ textAlign: "right", fontWeight: 700 }}>
-                      {fmt(stockVal)}
-                    </td>
-                  )}
+                  <td className="mono text-profit" style={{ textAlign: "right", fontWeight: 700 }}>
+                    {fmt(stockVal)}
+                  </td>
                   <td>{supplier?.name || "—"}</td>
                   <td><ChevronRight size={15} color="var(--ink-soft)" /></td>
                 </tr>
@@ -2556,7 +2497,7 @@ function Inventory({ db, setDb, role, notify, currentUser }) {
             })}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={canSeeCost ? 9 : 7} style={{ textAlign: "center", color: "var(--ink-soft)", padding: 28 }}>
+                <td colSpan={canSeeCost ? 9 : 8} style={{ textAlign: "center", color: "var(--ink-soft)", padding: 28 }}>
                   No inventory products match "{query}".
                 </td>
               </tr>
@@ -2571,8 +2512,7 @@ function Inventory({ db, setDb, role, notify, currentUser }) {
           const low = (p.stock || 0) <= (p.minStock || 0);
           const supplier = db.suppliers.find(s => s.id === p.supplierId);
           const unitCost = getProductUnitCost(p);
-          const stockCostVal = getProductStockCost(p);
-          const stockRetailVal = getProductStockRetail(p);
+          const stockVal = getProductStockValue(p);
 
           return (
             <div
@@ -2623,12 +2563,10 @@ function Inventory({ db, setDb, role, notify, currentUser }) {
                     </span>
                   )}
                 </div>
-                {canSeeCost && (
-                  <div style={{ textAlign: "right" }}>
-                    <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>Total Val: </span>
-                    <strong className="mono" style={{ fontSize: 13.5, color: "var(--ink)" }}>{fmt(stockCostVal)}</strong>
-                  </div>
-                )}
+                <div style={{ textAlign: "right" }}>
+                  <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>Stock Val: </span>
+                  <strong className="mono text-profit" style={{ fontSize: 14 }}>{fmt(stockVal)}</strong>
+                </div>
               </div>
             </div>
           );
@@ -2677,9 +2615,7 @@ function ProductDrawer({ product, db, setDb, canSeeCost, onDelete, onClose, noti
   });
 
   const unitCost = getProductUnitCost(product);
-  const stockCostVal = getProductStockCost(product);
-  const stockRetailVal = getProductStockRetail(product);
-  const potentialProfit = stockRetailVal - stockCostVal;
+  const stockVal = getProductStockValue(product);
 
   function handleSaveEdit() {
     const updatedBuyPrice = Number(editForm.buyPrice) >= 0 ? Number(editForm.buyPrice) : product.buyPrice;
@@ -2739,35 +2675,6 @@ function ProductDrawer({ product, db, setDb, canSeeCost, onDelete, onClose, noti
             {product.description}
           </div>
         )}
-
-        {/* Real-time Item Valuation Box */}
-        <div style={{ background: "var(--surface-hover)", border: "1px solid var(--line)", padding: 14, borderRadius: 10, marginBottom: 16 }}>
-          <div className="disp" style={{ fontSize: 15, fontWeight: 700, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
-            <Package size={15} color="var(--rust)" /> Real-Time Item Valuation
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            <div>
-              <div className="hf-kpi-label">Stock Quantity</div>
-              <div className="mono" style={{ fontSize: 16, fontWeight: 700, marginTop: 2 }}>{product.stock} {product.baseUnit}</div>
-            </div>
-            {canSeeCost && (
-              <div>
-                <div className="hf-kpi-label">Unit Cost Basis</div>
-                <div className="mono" style={{ fontSize: 16, fontWeight: 700, marginTop: 2 }}>{fmt(unitCost)}/{product.baseUnit}</div>
-              </div>
-            )}
-            <div>
-              <div className="hf-kpi-label">Retail Sales Val</div>
-              <div className="mono text-profit" style={{ fontSize: 16, fontWeight: 700, marginTop: 2 }}>{fmt(stockRetailVal)}</div>
-            </div>
-            {canSeeCost && (
-              <div>
-                <div className="hf-kpi-label">Total Cost Val</div>
-                <div className="mono" style={{ fontSize: 16, fontWeight: 700, marginTop: 2 }}>{fmt(stockCostVal)}</div>
-              </div>
-            )}
-          </div>
-        </div>
 
         {editing ? (
           <div style={{ background: "var(--surface-hover)", padding: 14, borderRadius: 10, marginBottom: 16 }}>
@@ -2840,6 +2747,7 @@ function ProductDrawer({ product, db, setDb, canSeeCost, onDelete, onClose, noti
             {canSeeCost && <Stat label="Buying Price (Package)" value={`${fmt(product.buyPrice)} / ${product.purchaseUnit}`} />}
             {canSeeCost && <Stat label="Unit Cost Basis" value={`${fmt(unitCost)} / ${product.baseUnit}`} />}
             <Stat label="Selling Price" value={fmt(product.sellPrice)} />
+            <Stat label="Real-Time Stock Value" value={fmt(stockVal)} />
             {product.contractorPrice > 0 && <Stat label="Contractor Price" value={fmt(product.contractorPrice)} />}
             {product.wholesalePrice > 0 && <Stat label="Wholesale Price" value={fmt(product.wholesalePrice)} />}
             <Stat label="Main Supplier" value={supplier?.name || "—"} />

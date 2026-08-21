@@ -353,18 +353,25 @@ export function exportAuditLogPDF({ logs, userFilter = "all", query = "" }) {
 export function exportInventoryPDF({ products, suppliers }) {
   const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
   
-  const totalStockItems = products.reduce((a, p) => a + (p.stock || 0), 0);
-  const totalStockValue = products.reduce((a, p) => a + (p.stock || 0) * (p.buyPrice / (p.conversionFactor || 1)), 0);
-  const lowStockCount = products.filter(p => p.stock <= p.minStock).length;
+  const totalStockItems = products.reduce((a, p) => a + Math.max(0, Number(p.stock) || 0), 0);
+  const totalStockValue = products.reduce((a, p) => {
+    const factor = Number(p.conversionFactor) > 0 ? Number(p.conversionFactor) : 1;
+    const buy = Number(p.buyPrice) || 0;
+    const unitCost = buy > 0 ? (buy / factor) : (Number(p.sellPrice) || 0);
+    return a + Math.max(0, Number(p.stock) || 0) * unitCost;
+  }, 0);
+  const lowStockCount = products.filter(p => (Number(p.stock) || 0) <= (Number(p.minStock) || 0)).length;
 
-  const subtitle = `Total Products: ${products.length} · Total Units: ${totalStockItems.toLocaleString()} · Low Stock Alerts: ${lowStockCount} · Total Valuation: ${fmtCurrency(totalStockValue)}`;
+  const subtitle = `Total Products: ${products.length} · Total Units: ${totalStockItems.toLocaleString()} · Low Stock Alerts: ${lowStockCount} · Real-Time Valuation: ${fmtCurrency(totalStockValue)}`;
   addPDFHeader(doc, "Inventory & Stock Valuation Report", subtitle);
 
   const tableBody = products.map((p, idx) => {
     const supplier = suppliers.find(s => s.id === p.supplierId)?.name || "—";
-    const isLow = p.stock <= p.minStock;
-    const unitCost = p.buyPrice / (p.conversionFactor || 1);
-    const lineVal = p.stock * unitCost;
+    const isLow = (Number(p.stock) || 0) <= (Number(p.minStock) || 0);
+    const factor = Number(p.conversionFactor) > 0 ? Number(p.conversionFactor) : 1;
+    const buy = Number(p.buyPrice) || 0;
+    const unitCost = buy > 0 ? (buy / factor) : (Number(p.sellPrice) || 0);
+    const lineVal = Math.max(0, Number(p.stock) || 0) * unitCost;
 
     return [
       idx + 1,
