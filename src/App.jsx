@@ -476,6 +476,40 @@ const GlobalStyle = ({ theme }) => {
       .text-profit { color: var(--green) !important; }
       .text-loss { color: var(--red) !important; }
 
+      /* Layout Containers */
+      .hf-root {
+        display: flex;
+        flex-direction: row;
+        width: 100vw;
+        max-width: 100%;
+        min-height: 100vh;
+        background: var(--bg);
+        overflow-x: hidden;
+      }
+      .hf-sidebar {
+        width: 240px;
+        background: var(--tab-bg);
+        flex-shrink: 0;
+        display: flex;
+        flex-direction: column;
+        padding: 20px 0;
+      }
+      .hf-main-wrap {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        width: 100%;
+        overflow: hidden;
+      }
+      .hf-main-content-wrap {
+        flex: 1;
+        overflow-y: auto;
+        padding: 24px 32px;
+        width: 100%;
+        box-sizing: border-box;
+      }
+
       /* Valuation Summary Banner */
       .hf-stock-banner {
         display: grid;
@@ -485,14 +519,15 @@ const GlobalStyle = ({ theme }) => {
       }
 
       /* Desktop vs Mobile component toggles */
-      .hf-desktop-only { display: block; }
-      .hf-mobile-only { display: none; }
-      .hf-mobile-header { display: none; }
-      .hf-mobile-bottomnav { display: none; }
-      .hf-mobile-backdrop { display: none; }
+      .hf-desktop-only { display: block !important; }
+      .hf-mobile-only { display: none !important; }
+      .hf-mobile-header { display: none !important; }
+      .hf-mobile-bottomnav { display: none !important; }
+      .hf-mobile-backdrop { display: none !important; }
 
       .hf-table-responsive {
         width: 100%;
+        max-width: 100%;
         overflow-x: auto;
         -webkit-overflow-scrolling: touch;
       }
@@ -524,45 +559,58 @@ const GlobalStyle = ({ theme }) => {
         gap: 16px;
       }
 
-      /* Mobile Phone Optimization (Screen width <= 768px) */
-      @media (max-width: 768px) {
+      /* Mobile & Tablet Full Screen Optimization (Screen width <= 1024px) */
+      @media (max-width: 1024px) {
         .hf-desktop-only { display: none !important; }
         .hf-mobile-only { display: block !important; }
 
+        .hf-root {
+          flex-direction: column !important;
+          width: 100% !important;
+          min-width: 100% !important;
+          min-height: 100vh !important;
+          overflow-x: hidden !important;
+        }
+
         .hf-mobile-header {
-          display: flex;
+          display: flex !important;
           align-items: center;
           justify-content: space-between;
-          padding: max(10px, env(safe-area-inset-top, 10px)) 14px 10px;
+          padding: max(12px, env(safe-area-inset-top, 12px)) 16px 12px !important;
           background: var(--tab-bg);
           color: #fff;
           position: sticky;
           top: 0;
           z-index: 900;
           border-bottom: 1px solid rgba(255,255,255,0.08);
-          box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+          box-shadow: 0 2px 10px rgba(0,0,0,0.25);
+          width: 100% !important;
+          box-sizing: border-box !important;
         }
 
         .hf-mobile-backdrop {
-          display: block;
-          position: fixed;
-          inset: 0;
-          background: rgba(0,0,0,0.65);
-          backdrop-filter: blur(3px);
-          z-index: 1000;
+          display: block !important;
+          position: fixed !important;
+          inset: 0 !important;
+          background: rgba(0,0,0,0.65) !important;
+          backdrop-filter: blur(4px) !important;
+          z-index: 1150 !important;
         }
 
         .hf-sidebar {
           position: fixed !important;
-          top: 0;
-          left: 0;
-          bottom: 0;
-          width: 280px !important;
-          z-index: 1100;
-          transform: translateX(-100%);
-          transition: transform .24s cubic-bezier(0.4, 0, 0.2, 1);
-          box-shadow: 0 0 35px rgba(0,0,0,0.6);
+          top: 0 !important;
+          left: 0 !important;
+          bottom: 0 !important;
+          width: min(85vw, 300px) !important;
+          height: 100vh !important;
+          height: 100dvh !important;
+          z-index: 1200 !important;
+          transform: translateX(-100%) !important;
+          transition: transform .25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+          box-shadow: 0 0 40px rgba(0,0,0,0.7) !important;
           padding-top: max(20px, env(safe-area-inset-top, 20px)) !important;
+          background: var(--tab-bg) !important;
         }
         .hf-sidebar.open {
           transform: translateX(0) !important;
@@ -572,25 +620,35 @@ const GlobalStyle = ({ theme }) => {
           display: none !important;
         }
 
+        .hf-main-wrap {
+          width: 100% !important;
+          max-width: 100% !important;
+          overflow-x: hidden !important;
+        }
+
         .hf-main-content-wrap {
-          padding: 14px 12px calc(80px + env(safe-area-inset-bottom, 0px)) !important;
-          -webkit-overflow-scrolling: touch;
+          padding: 14px 14px calc(80px + env(safe-area-inset-bottom, 12px)) !important;
+          width: 100% !important;
+          max-width: 100% !important;
+          box-sizing: border-box !important;
+          -webkit-overflow-scrolling: touch !important;
+          overflow-x: hidden !important;
         }
 
         .hf-mobile-bottomnav {
-          display: flex;
-          position: fixed;
-          bottom: 0;
-          left: 0;
-          right: 0;
-          height: calc(60px + env(safe-area-inset-bottom, 0px));
-          padding-bottom: env(safe-area-inset-bottom, 0px);
-          background: var(--surface);
-          border-top: 1.5px solid var(--line);
-          z-index: 950;
-          justify-content: space-around;
-          align-items: center;
-          box-shadow: 0 -4px 20px rgba(0,0,0,0.08);
+          display: flex !important;
+          position: fixed !important;
+          bottom: 0 !important;
+          left: 0 !important;
+          right: 0 !important;
+          height: calc(62px + env(safe-area-inset-bottom, 0px)) !important;
+          padding-bottom: env(safe-area-inset-bottom, 0px) !important;
+          background: var(--surface) !important;
+          border-top: 1.5px solid var(--line) !important;
+          z-index: 950 !important;
+          justify-content: space-around !important;
+          align-items: center !important;
+          box-shadow: 0 -4px 20px rgba(0,0,0,0.12) !important;
         }
 
         .hf-bottom-item {
@@ -611,55 +669,55 @@ const GlobalStyle = ({ theme }) => {
           -webkit-tap-highlight-color: transparent;
         }
         .hf-bottom-item.active {
-          color: var(--rust);
-          font-weight: 700;
+          color: var(--rust) !important;
+          font-weight: 700 !important;
         }
 
         .hf-stock-banner {
-          grid-template-columns: 1fr 1fr !important;
-          gap: 8px !important;
-        }
-
-        .hf-kpis-grid {
-          grid-template-columns: repeat(2, 1fr) !important;
-          gap: 8px !important;
-          margin-bottom: 16px !important;
-        }
-
-        .hf-cashbook-summary {
-          grid-template-columns: 1fr !important;
-          gap: 8px !important;
-        }
-
-        .hf-two-col {
-          grid-template-columns: 1fr !important;
-          gap: 12px !important;
-        }
-
-        .hf-field-grid {
           grid-template-columns: 1fr !important;
           gap: 10px !important;
         }
 
+        .hf-kpis-grid {
+          grid-template-columns: repeat(2, 1fr) !important;
+          gap: 10px !important;
+          margin-bottom: 18px !important;
+        }
+
+        .hf-cashbook-summary {
+          grid-template-columns: 1fr !important;
+          gap: 10px !important;
+        }
+
+        .hf-two-col {
+          grid-template-columns: 1fr !important;
+          gap: 14px !important;
+        }
+
+        .hf-field-grid {
+          grid-template-columns: 1fr !important;
+          gap: 12px !important;
+        }
+
         .hf-ticket {
-          padding: 12px 14px !important;
-          min-height: 90px !important;
+          padding: 14px 14px !important;
+          min-height: 100px !important;
           height: auto !important;
         }
 
         .hf-card {
-          border-radius: 12px;
+          border-radius: 14px !important;
         }
 
         .hf-btn {
-          min-height: 44px;
-          font-size: 14px;
+          min-height: 44px !important;
+          font-size: 14px !important;
         }
 
         .hf-input {
           font-size: 16px !important; /* Prevents auto-zoom in iOS Safari */
-          min-height: 44px;
-          padding: 10px 12px;
+          min-height: 44px !important;
+          padding: 10px 14px !important;
         }
 
         /* Mobile Modal Bottom Sheet */
@@ -667,18 +725,17 @@ const GlobalStyle = ({ theme }) => {
           width: 100% !important;
           max-width: 100% !important;
           max-height: 90vh !important;
+          max-height: 90dvh !important;
           border-radius: 20px 20px 0 0 !important;
           margin-top: auto !important;
-          padding: 20px 16px calc(24px + env(safe-area-inset-bottom, 0px)) !important;
+          padding: 20px 16px calc(24px + env(safe-area-inset-bottom, 12px)) !important;
         }
       }
 
-      @media (max-width: 480px) {
-        .hf-stock-banner {
-          grid-template-columns: 1fr !important;
-        }
+      @media (max-width: 380px) {
         .hf-kpis-grid {
-          grid-template-columns: 1fr 1fr !important;
+          grid-template-columns: 1fr !important;
+          gap: 8px !important;
         }
       }
     `}</style>
@@ -1147,7 +1204,8 @@ function Dashboard({ db, role, notify }) {
             </div>
           </div>
 
-          <div className="hf-card hf-table-responsive" style={{ padding: 6 }}>
+          {/* Desktop Table View */}
+          <div className="hf-card hf-desktop-only" style={{ padding: 6, overflowX: "auto" }}>
             <table className="hf-table">
               <thead>
                 <tr>
@@ -1218,6 +1276,63 @@ function Dashboard({ db, role, notify }) {
                 )}
               </tbody>
             </table>
+          </div>
+
+          {/* Mobile Card List View (Sight-Friendly, Easy to Touch and Scroll) */}
+          <div className="hf-mobile-only" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {sortedBestSellers.slice(0, 5).map((item, idx) => {
+              const topProduct = sortedBestSellers[0];
+              const maxMetric = topProduct
+                ? (bestSellerSort === "profit" ? topProduct.profit : bestSellerSort === "qty" ? topProduct.qty : topProduct.revenue) || 1
+                : 1;
+              const currentMetric = bestSellerSort === "profit" ? item.profit : bestSellerSort === "qty" ? item.qty : item.revenue;
+              const pct = maxMetric > 0 ? Math.round((currentMetric / maxMetric) * 100) : 0;
+              const barColor = bestSellerSort === "profit" ? "var(--green)" : bestSellerSort === "qty" ? "var(--steel)" : "var(--rust)";
+
+              return (
+                <div key={item.id} className="hf-card" style={{ padding: "12px 14px" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{
+                        display: "inline-flex", width: 26, height: 26, borderRadius: "50%",
+                        background: idx === 0 ? "var(--rust)" : idx === 1 ? "#33546B" : "var(--surface-hover)",
+                        color: idx < 2 ? "#fff" : "var(--ink)", fontWeight: 700, fontSize: 12,
+                        alignItems: "center", justifyContent: "center", border: "1px solid var(--line)"
+                      }}>
+                        #{idx + 1}
+                      </span>
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: 14.5 }}>{item.name}</div>
+                        <div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>{item.category}</div>
+                      </div>
+                    </div>
+                    <Pill tone="steel">{item.qty.toLocaleString()} units</Pill>
+                  </div>
+
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, marginTop: 6, background: "var(--surface-hover)", padding: "8px 10px", borderRadius: 8 }}>
+                    <div>
+                      <span style={{ color: "var(--ink-soft)", fontSize: 11 }}>Revenue: </span>
+                      <strong className="mono" style={{ fontSize: 13.5 }}>{fmt(item.revenue)}</strong>
+                    </div>
+                    <div>
+                      <span style={{ color: "var(--ink-soft)", fontSize: 11 }}>Profit: </span>
+                      <strong className="mono text-profit" style={{ fontSize: 13.5 }}>{fmt(item.profit)}</strong>
+                    </div>
+                  </div>
+
+                  <div style={{ marginTop: 8 }}>
+                    <div style={{ background: "var(--line)", borderRadius: 6, height: 6, width: "100%", overflow: "hidden" }}>
+                      <div style={{ background: barColor, height: "100%", width: `${pct}%`, borderRadius: 6 }} />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+            {sortedBestSellers.length === 0 && (
+              <div className="hf-card" style={{ padding: 20, textAlign: "center", color: "var(--ink-soft)" }}>
+                No product sales recorded yet.
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -4265,7 +4380,7 @@ export default function App() {
   };
 
   return (
-    <div className="hf-root" style={{ minHeight: "100vh", display: "flex", flexDirection: "row" }}>
+    <div className="hf-root">
       <GlobalStyle theme={theme} />
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
@@ -4275,7 +4390,7 @@ export default function App() {
       )}
 
       {/* Sidebar Navigation */}
-      <div className={`hf-sidebar ${mobileNavOpen ? "open" : ""}`} style={{ width: 240, background: "var(--tab-bg)", flexShrink: 0, display: "flex", flexDirection: "column", padding: "20px 0" }}>
+      <div className={`hf-sidebar ${mobileNavOpen ? "open" : ""}`}>
         <div style={{ padding: "0 20px 22px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <div style={{
@@ -4329,7 +4444,7 @@ export default function App() {
       </div>
 
       {/* Main Content Area */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
+      <div className="hf-main-wrap">
         {/* Mobile Header Bar */}
         <div className="hf-mobile-header">
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
