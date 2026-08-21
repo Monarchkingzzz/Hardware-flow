@@ -699,14 +699,81 @@ function Dashboard({ db, role, notify }) {
   }
 
   const kpis = [
-    { label: salesLabel, value: fmt(revenuePeriod), tone: "ink", icon: ReceiptIcon, rawVal: revenuePeriod },
-    { label: profitLabel, value: fmt(profitPeriod), tone: "green", ownerOnly: true, icon: TrendingUp, valColor: "var(--green)", rawVal: profitPeriod },
-    { label: expLabel, value: fmt(expensesPeriod), tone: "amber", ownerOnly: true, icon: TrendingDown, valColor: "var(--amber)", rawVal: expensesPeriod },
-    { label: netLabel, value: netValue, tone: netTone, ownerOnly: true, icon: BarChart3, valColor: netColor, rawVal: net, sub: netSub },
-    { label: debtsLabel, value: fmt(debtsCollectedTotal), tone: "green", icon: Coins, valColor: "var(--green)", rawVal: debtsCollectedTotal },
-    { label: "Customer Debts", value: fmt(totalDebt), tone: "steel", icon: Users, rawVal: totalDebt },
-    { label: "Supplier Balances", value: fmt(totalSupplierBal), tone: "steel", ownerOnly: true, icon: Building2, rawVal: totalSupplierBal },
-    { label: "Stock Value", value: fmt(stockValueCorrect), tone: "ink", ownerOnly: true, icon: Package, rawVal: stockValueCorrect },
+    {
+      label: salesLabel,
+      value: fmt(revenuePeriod),
+      tone: "ink",
+      icon: ReceiptIcon,
+      rawVal: revenuePeriod,
+      sub: period === "today" ? "Cash & M-Pesa volume" : "Period gross sales",
+    },
+    {
+      label: profitLabel,
+      value: (profitPeriod > 0 ? "+" : "") + fmt(profitPeriod),
+      tone: "green",
+      ownerOnly: true,
+      icon: TrendingUp,
+      valColor: "var(--green)",
+      rawVal: profitPeriod,
+      sub: period === "today" ? "Today's margin" : "Margin on period sales",
+    },
+    {
+      label: expLabel,
+      value: fmt(expensesPeriod),
+      tone: "amber",
+      ownerOnly: true,
+      icon: TrendingDown,
+      valColor: expensesPeriod > 0 ? "var(--amber)" : "var(--ink)",
+      rawVal: expensesPeriod,
+      sub: period === "today" ? "Today's outflows" : "Period cash outflows",
+    },
+    {
+      label: netLabel,
+      value: netValue,
+      tone: netTone,
+      ownerOnly: true,
+      icon: BarChart3,
+      valColor: netColor,
+      rawVal: net,
+      sub: netSub,
+    },
+    {
+      label: debtsLabel,
+      value: fmt(debtsCollectedTotal),
+      tone: "green",
+      icon: Coins,
+      valColor: debtsCollectedTotal > 0 ? "var(--green)" : "var(--ink)",
+      rawVal: debtsCollectedTotal,
+      sub: period === "today" ? "Credit recoveries today" : "Total debt recovered",
+    },
+    {
+      label: "Customer Debts",
+      value: fmt(totalDebt),
+      tone: totalDebt > 0 ? "red" : "steel",
+      icon: Users,
+      valColor: totalDebt > 0 ? "var(--red)" : "var(--ink)",
+      rawVal: totalDebt,
+      sub: "Outstanding credit balances",
+    },
+    {
+      label: "Supplier Balances",
+      value: fmt(totalSupplierBal),
+      tone: totalSupplierBal > 0 ? "amber" : "steel",
+      ownerOnly: true,
+      icon: Building2,
+      valColor: totalSupplierBal > 0 ? "var(--amber)" : "var(--ink)",
+      rawVal: totalSupplierBal,
+      sub: "Pending supplier dues",
+    },
+    {
+      label: "Stock Value",
+      value: fmt(stockValueCorrect),
+      tone: "ink",
+      ownerOnly: true,
+      icon: Package,
+      rawVal: stockValueCorrect,
+      sub: "Total inventory cost base",
+    },
   ];
 
   const toneColors = {
@@ -771,57 +838,88 @@ function Dashboard({ db, role, notify }) {
       </div>
 
       {/* KPI Cards Grid with Perfect Straight Line Alignment & Subtitles */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px,1fr))", gap: 12, marginBottom: 22 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 12, marginBottom: 22 }}>
         {kpis.map((k, i) => {
           const hidden = k.ownerOnly && role !== "owner";
           const tc = toneColors[k.tone] || toneColors.ink;
           const Icon = k.icon;
+
+          // Dynamically scale typography for large values (e.g. millions) so numbers fit perfectly
+          const valStr = String(k.value || "");
+          const fontSize = valStr.length > 15 ? 16 : valStr.length > 12 ? 18.5 : valStr.length > 10 ? 20.5 : 22.5;
+
           return (
             <div
               key={i}
               className="hf-ticket"
               style={{
-                padding: "16px 18px",
+                padding: "15px 16px",
                 display: "flex",
                 flexDirection: "column",
                 justifyContent: "space-between",
-                minHeight: 112,
-                height: 112,
+                minHeight: 118,
+                height: 118,
+                boxSizing: "border-box",
               }}
             >
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <div className="hf-icon-circle" style={{ background: tc.bg }}>
-                  <Icon size={16} color={tc.c} />
+              {/* Top Row: Icon + Label */}
+              <div style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0 }}>
+                <div className="hf-icon-circle" style={{ width: 30, height: 30, borderRadius: 8, background: tc.bg }}>
+                  <Icon size={15} color={tc.c} />
                 </div>
-                <div className="hf-kpi-label" style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                <div
+                  className="hf-kpi-label"
+                  style={{
+                    flex: 1,
+                    fontSize: 11,
+                    fontWeight: 700,
+                    letterSpacing: "0.05em",
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                  title={k.label}
+                >
                   {k.label}
                 </div>
               </div>
 
+              {/* Bottom Row: Main Number + Subtitle */}
               {hidden ? (
-                <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#98A0AB" }}>
-                  <Lock size={14} /><span style={{ fontSize: 13 }}>Owner only</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#98A0AB", height: 42 }}>
+                  <Lock size={14} /><span style={{ fontSize: 12.5, fontWeight: 600 }}>Owner only</span>
                 </div>
               ) : (
-                <div>
-                  <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
-                    <div
-                      className="mono"
-                      style={{
-                        fontSize: 22,
-                        fontWeight: 700,
-                        color: k.valColor || "var(--ink)",
-                        lineHeight: 1,
-                      }}
-                    >
-                      {k.value}
-                    </div>
+                <div style={{ display: "flex", flexDirection: "column", justifyContent: "flex-end", minWidth: 0 }}>
+                  <div
+                    className="mono"
+                    style={{
+                      fontSize,
+                      fontWeight: 700,
+                      color: k.valColor || "var(--ink)",
+                      lineHeight: 1.15,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                    title={k.value}
+                  >
+                    {k.value}
                   </div>
-                  {k.sub && (
-                    <div style={{ fontSize: 10.5, color: "var(--ink-soft)", marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                      {k.sub}
-                    </div>
-                  )}
+                  <div
+                    style={{
+                      fontSize: 10.5,
+                      color: "var(--ink-soft)",
+                      marginTop: 3,
+                      lineHeight: 1.2,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                    title={k.sub || ""}
+                  >
+                    {k.sub || "—"}
+                  </div>
                 </div>
               )}
             </div>
