@@ -543,3 +543,90 @@ export function exportReportCenterPDF({ monthName, revenue, cogs, grossProfit, e
   addPDFFooter(doc);
   doc.save(`hardwareflow-performance-report-${monthName.toLowerCase().replace(/\s+/g, "-")}.pdf`);
 }
+
+/**
+ * Export Low Stock & Purchase Reorder List PDF
+ */
+export function exportReorderListPDF(lowStockProducts, suppliers = []) {
+  const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  const dateStr = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+  
+  addPDFHeader(doc, "Low Stock & Purchase Reorder List", `Inventory depletion alerts & recommended vendor reorders as of ${dateStr}`);
+
+  // Summary Metrics Header Card
+  const totalItems = lowStockProducts.length;
+  const outOfStockCount = lowStockProducts.filter(p => (p.stock || 0) <= 0).length;
+  let estimatedTotalCost = 0;
+
+  const rows = lowStockProducts.map((p, idx) => {
+    const supp = suppliers.find(s => s.id === p.supplierId);
+    const factor = Number(p.conversionFactor) > 0 ? Number(p.conversionFactor) : 1;
+    const currentStock = Math.max(0, Number(p.stock) || 0);
+    const minStock = Math.max(0, Number(p.minStock) || 0);
+    const deficitUnits = Math.max(1, (minStock * 2) - currentStock);
+    const recommendedPackages = Math.ceil(deficitUnits / factor);
+    const packageCost = Number(p.buyPrice) || 0;
+    const estItemCost = recommendedPackages * packageCost;
+    estimatedTotalCost += estItemCost;
+
+    return [
+      idx + 1,
+      `${p.name}\n${p.sku || "No SKU"} · ${p.category || "General"}`,
+      `${currentStock} ${p.baseUnit || "pcs"}\n(Min: ${minStock})`,
+      `${recommendedPackages} ${p.purchaseUnit || "pkg"}\n(= ${recommendedPackages * factor} ${p.baseUnit || "pcs"})`,
+      supp ? `${supp.name}\n${supp.phone || "—"}` : "Unassigned",
+      fmtCurrency(packageCost),
+      fmtCurrency(estItemCost),
+    ];
+  });
+
+  const startY = 44;
+  doc.setFillColor(245, 247, 250);
+  doc.roundedRect(14, startY, doc.internal.pageSize.getWidth() - 28, 16, 2, 2, "F");
+  
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.setTextColor(20, 25, 32);
+  doc.text(`Total Low/Out of Stock Items: ${totalItems}  |  Critical (0 Stock): ${outOfStockCount}  |  Est. Reorder Budget: ${fmtCurrency(estimatedTotalCost)}`, 18, startY + 10);
+
+  autoTable(doc, {
+    startY: startY + 20,
+    head: [["#", "Product / Category", "Current Stock", "Recommended Reorder", "Primary Supplier", "Pack Cost", "Est. Total Cost"]],
+    body: rows.length > 0 ? rows : [["—", "All stock levels are healthy. No items below minimum threshold.", "—", "—", "—", "—", "KSh 0"]],
+    theme: "grid",
+    headStyles: { fillColor: [193, 80, 47], fontSize: 8, fontStyle: "bold" },
+    bodyStyles: { fontSize: 7.5, cellPadding: 2.5 },
+    columnStyles: {
+      0: { cellWidth: 10, halign: "center" },
+      1: { cellWidth: 48, fontStyle: "bold" },
+      2: { cellWidth: 26, halign: "center" },
+      3: { cellWidth: 32, halign: "center", fontStyle: "bold" },
+      4: { cellWidth: 32 },
+      5: { cellWidth: 20, halign: "right" },
+      6: { cellWidth: 24, halign: "right", fontStyle: "bold" },
+    },
+    margin: { left: 14, right: 14 },
+    didParseCell: function (data) {
+      if (data.column.index === 2 && data.section === "body") {
+        const text = String(data.cell.raw || "");
+        if (text.startsWith("0 ")) {
+          data.cell.styles.textColor = [193, 58, 46];
+          data.cell.styles.fontStyle = "bold";
+        }
+      }
+    }
+  });
+
+  addPDFFooter(doc);
+  doc.save(`hardwareflow-reorder-list-${todayISO(0)}.pdf`);
+}
+
+function todayISO(offsetDays = 0) {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+

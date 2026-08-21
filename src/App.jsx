@@ -5,14 +5,16 @@ import {
   AlertTriangle, TrendingUp, TrendingDown, ChevronRight, Minus, Trash2,
   ArrowRight, Receipt as ReceiptIcon, Download, Eye, Calendar,
   Award, CheckCircle2, Sun, Moon,
-  LogOut, Key, Coins, Edit3, Menu, Wifi, WifiOff, RefreshCw
+  LogOut, Key, Coins, Edit3, Menu, Wifi, WifiOff, RefreshCw,
+  Bell, BellRing, PhoneCall, Filter
 } from "lucide-react";
 import {
   exportAuditLogPDF,
   exportInventoryPDF,
   exportReportCenterPDF,
   exportReceiptPDF,
-  exportBestSellersPDF
+  exportBestSellersPDF,
+  exportReorderListPDF
 } from "./utils/pdfExport";
 import { ToastContainer } from "./components/Toast";
 import { LoginScreen, ForgotPasswordModal, ProfileModal, UserManagementModal } from "./components/Auth";
@@ -3089,12 +3091,35 @@ function Field({ label, help, children }) {
 }
 
 /* ================= RECEIVING ================= */
-function Receiving({ db, setDb, notify, currentUser }) {
-  const [supplierId, setSupplierId] = useState(db.suppliers[0]?.id || "");
+function Receiving({ db, setDb, notify, currentUser, prefill, onClearPrefill }) {
+  const [supplierId, setSupplierId] = useState(() => prefill?.supplierId || db.suppliers[0]?.id || "");
   const [invoiceRef, setInvoiceRef] = useState("");
   const [paymentMode, setPaymentMode] = useState("credit"); // "credit" | "cash" | "mpesa"
-  const [lines, setLines] = useState([{ productId: "", qty: "", buyPrice: "" }]);
+  const [lines, setLines] = useState(() => {
+    if (prefill?.productId) {
+      const p = (db.products || []).find(prod => prod.id === prefill.productId);
+      return [{
+        productId: prefill.productId,
+        qty: prefill.qty ? String(prefill.qty) : "1",
+        buyPrice: p ? String(p.buyPrice) : ""
+      }];
+    }
+    return [{ productId: "", qty: "", buyPrice: "" }];
+  });
   const [done, setDone] = useState(false);
+
+  useEffect(() => {
+    if (prefill?.productId) {
+      if (prefill.supplierId) setSupplierId(prefill.supplierId);
+      const p = (db.products || []).find(prod => prod.id === prefill.productId);
+      setLines([{
+        productId: prefill.productId,
+        qty: prefill.qty ? String(prefill.qty) : "1",
+        buyPrice: p ? String(p.buyPrice) : ""
+      }]);
+      if (typeof onClearPrefill === "function") onClearPrefill();
+    }
+  }, [prefill, db.products, onClearPrefill]);
 
   function updateLine(i, key, val) {
     setLines(ls => ls.map((l, idx) => idx === i ? { ...l, [key]: val } : l));
@@ -4791,9 +4816,457 @@ function AuditLog({ db, notify }) {
   );
 }
 
+/* ================= ALERTS & REORDERS HUB ================= */
+function Alerts({ db, setDb, notify, role, onRestock, onNavigate }) {
+  const [activeTab, setActiveTab] = useState("all"); // "all" | "out" | "low" | "debts" | "suppliers"
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const outOfStock = useMemo(() => {
+    return (db.products || []).filter(p => (Number(p.stock) || 0) <= 0);
+  }, [db.products]);
+
+  const lowStock = useMemo(() => {
+    return (db.products || []).filter(p => (Number(p.stock) || 0) > 0 && (Number(p.stock) || 0) <= (Number(p.minStock) || 0));
+  }, [db.products]);
+
+  const criticalStockProducts = useMemo(() => {
+    return [...outOfStock, ...lowStock];
+  }, [outOfStock, lowStock]);
+
+  const overdueCustomers = useMemo(() => {
+    return (db.customers || [])
+      .map(c => ({ ...c, balance: customerBalance(db, c.id), days: daysSinceLastActivity(db, c.id) }))
+      .filter(c => c.balance > 0 && c.days > 25);
+  }, [db.customers, db.sales]);
+
+  const supplierPayables = useMemo(() => {
+    return (db.suppliers || [])
+      .map(s => ({ ...s, outstanding: supplierOutstanding(db, s.id) }))
+      .filter(s => s.outstanding > 0);
+  }, [db.suppliers, db.products, db.expenses]);
+
+  // Compute estimated restock budget
+  const estimatedRestockBudget = useMemo(() => {
+    return criticalStockProducts.reduce((sum, p) => {
+      const factor = Number(p.conversionFactor) > 0 ? Number(p.conversionFactor) : 1;
+      const currentStock = Math.max(0, Number(p.stock) || 0);
+      const minStock = Math.max(0, Number(p.minStock) || 0);
+      const deficitUnits = Math.max(1, (minStock * 2) - currentStock);
+      const recommendedPackages = Math.ceil(deficitUnits / factor);
+      const packCost = Number(p.buyPrice) || 0;
+      return sum + (recommendedPackages * packCost);
+    }, 0);
+  }, [criticalStockProducts]);
+
+  const totalOverdueDebt = useMemo(() => {
+    return overdueCustomers.reduce((sum, c) => sum + c.balance, 0);
+  }, [overdueCustomers]);
+
+  const totalAlertsCount = criticalStockProducts.length + overdueCustomers.length + supplierPayables.length;
+
+  function handleExportPDF() {
+    if (criticalStockProducts.length === 0) {
+      notify("info", "No Low Stock Items", "All inventory stock levels are currently above minimum threshold.");
+      return;
+    }
+    exportReorderListPDF(criticalStockProducts, db.suppliers);
+    notify("success", "Reorder List PDF Exported", `Downloaded purchase order list for ${criticalStockProducts.length} low-stock item(s).`);
+  }
+
+  // Filtered Items
+  const filteredOutOfStock = outOfStock.filter(p => p.name.toLowerCase().includes(searchQuery.toLowerCase()) || (p.sku && p.sku.toLowerCase().includes(searchQuery.toLowerCase())) || (p.category && p.category.toLowerCase().includes(searchQuery.toLowerCase())));
+  const filteredLowStock = lowStock.filter(p => p.name.toLowerCase().includes(searchQuery.toLowerCase()) || (p.sku && p.sku.toLowerCase().includes(searchQuery.toLowerCase())) || (p.category && p.category.toLowerCase().includes(searchQuery.toLowerCase())));
+  const filteredCustomers = overdueCustomers.filter(c => c.name.toLowerCase().includes(searchQuery.toLowerCase()) || (c.phone && c.phone.includes(searchQuery)));
+  const filteredSuppliers = supplierPayables.filter(s => s.name.toLowerCase().includes(searchQuery.toLowerCase()) || (s.phone && s.phone.includes(searchQuery)));
+
+  return (
+    <div>
+      {/* Top Header & Export Action */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <div className="disp" style={{ fontSize: 26, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>
+            <span>Alerts & Reorders Hub</span>
+            {totalAlertsCount > 0 ? (
+              <Pill tone={outOfStock.length > 0 ? "red" : "amber"}>{totalAlertsCount} ACTIVE</Pill>
+            ) : (
+              <Pill tone="green">ALL HEALTHY</Pill>
+            )}
+          </div>
+          <div style={{ color: "var(--ink-soft)", fontSize: 13 }}>
+            Real-time depletion monitoring, automatic reorder recommendations, and debtor warnings.
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            type="button"
+            className="hf-btn hf-btn-primary"
+            onClick={handleExportPDF}
+            disabled={criticalStockProducts.length === 0}
+            title="Download purchase reorder list as PDF for suppliers / WhatsApp"
+          >
+            <Download size={15} /> Export Reorder List (PDF)
+          </button>
+        </div>
+      </div>
+
+      {/* Top KPI Cards Banner */}
+      <div className="hf-kpis-grid" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 20 }}>
+        <div
+          className="hf-ticket"
+          style={{ padding: "16px 18px", display: "flex", flexDirection: "column", borderLeft: outOfStock.length > 0 ? "4px solid var(--red)" : "4px solid var(--line)", cursor: "pointer" }}
+          onClick={() => setActiveTab("out")}
+        >
+          <div className="hf-kpi-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <AlertTriangle size={14} color="var(--red)" /> Out of Stock (0 units)
+          </div>
+          <div className={`mono ${outOfStock.length > 0 ? "text-loss" : "text-profit"}`} style={{ fontSize: 22, fontWeight: 700, marginTop: "auto" }}>
+            {outOfStock.length} items
+          </div>
+        </div>
+
+        <div
+          className="hf-ticket"
+          style={{ padding: "16px 18px", display: "flex", flexDirection: "column", borderLeft: lowStock.length > 0 ? "4px solid var(--amber)" : "4px solid var(--line)", cursor: "pointer" }}
+          onClick={() => setActiveTab("low")}
+        >
+          <div className="hf-kpi-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <AlertTriangle size={14} color="var(--amber)" /> Low Stock Threshold
+          </div>
+          <div className={`mono ${lowStock.length > 0 ? "text-loss" : "text-profit"}`} style={{ fontSize: 22, fontWeight: 700, marginTop: "auto" }}>
+            {lowStock.length} items
+          </div>
+        </div>
+
+        <div
+          className="hf-ticket"
+          style={{ padding: "16px 18px", display: "flex", flexDirection: "column", borderLeft: overdueCustomers.length > 0 ? "4px solid #7E22CE" : "4px solid var(--line)", cursor: "pointer" }}
+          onClick={() => setActiveTab("debts")}
+        >
+          <div className="hf-kpi-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <CreditCard size={14} color="#7E22CE" /> Overdue Debtors (&gt;25 days)
+          </div>
+          <div className={`mono ${overdueCustomers.length > 0 ? "text-loss" : "text-profit"}`} style={{ fontSize: 22, fontWeight: 700, marginTop: "auto" }}>
+            {overdueCustomers.length} ({fmt(totalOverdueDebt)})
+          </div>
+        </div>
+
+        <div className="hf-ticket" style={{ padding: "16px 18px", display: "flex", flexDirection: "column" }}>
+          <div className="hf-kpi-label">Est. Restock Budget Needed</div>
+          <div className="mono text-profit" style={{ fontSize: 20, fontWeight: 700, marginTop: "auto" }}>
+            {fmt(estimatedRestockBudget)}
+          </div>
+        </div>
+      </div>
+
+      {/* Filter Tabs & Search Bar */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {[
+            { key: "all", label: `All Alerts (${totalAlertsCount})` },
+            { key: "out", label: `🚨 Out of Stock (${outOfStock.length})` },
+            { key: "low", label: `⚠️ Low Stock (${lowStock.length})` },
+            { key: "debts", label: `⏳ Overdue Debtors (${overdueCustomers.length})` },
+            { key: "suppliers", label: `🚚 Payables Due (${supplierPayables.length})` },
+          ].map(t => {
+            const isSel = activeTab === t.key;
+            return (
+              <button
+                key={t.key}
+                type="button"
+                className="hf-btn"
+                onClick={() => setActiveTab(t.key)}
+                style={{
+                  fontSize: 12.5,
+                  padding: "7px 12px",
+                  background: isSel ? "var(--rust)" : "var(--surface)",
+                  color: isSel ? "#FFFFFF" : "var(--ink)",
+                  border: isSel ? "1.5px solid var(--rust-dark)" : "1.5px solid var(--line)",
+                  fontWeight: isSel ? 700 : 500,
+                  borderRadius: 9,
+                }}
+              >
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Search Filter */}
+        <div style={{ position: "relative", minWidth: 220 }}>
+          <Search size={15} style={{ position: "absolute", left: 10, top: 11, color: "var(--ink-soft)" }} />
+          <input
+            className="hf-input"
+            style={{ paddingLeft: 32, fontSize: 13, height: 36, minHeight: 36 }}
+            placeholder="Search items or people…"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+          />
+        </div>
+      </div>
+
+      {/* Main Alerts Content List */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        {/* 1. OUT OF STOCK SECTION */}
+        {(activeTab === "all" || activeTab === "out") && filteredOutOfStock.length > 0 && (
+          <div className="hf-card" style={{ padding: "18px 20px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+              <div className="disp" style={{ fontSize: 18, fontWeight: 700, color: "var(--red)", display: "flex", alignItems: "center", gap: 6 }}>
+                <AlertTriangle size={18} /> Critical: Out of Stock Items ({filteredOutOfStock.length})
+              </div>
+              <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>Sales are blocked until stock is received</span>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
+              {filteredOutOfStock.map(p => {
+                const supp = (db.suppliers || []).find(s => s.id === p.supplierId);
+                const factor = Number(p.conversionFactor) > 0 ? Number(p.conversionFactor) : 1;
+                const minStock = Math.max(0, Number(p.minStock) || 0);
+                const deficitUnits = Math.max(1, minStock * 2);
+                const recommendedPackages = Math.ceil(deficitUnits / factor);
+                const packageCost = Number(p.buyPrice) || 0;
+                const estCost = recommendedPackages * packageCost;
+
+                return (
+                  <div
+                    key={p.id}
+                    className="hf-ticket"
+                    style={{ padding: "14px 16px", border: "1.5px solid var(--red-tint)", background: "var(--surface)" }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: 15 }}>{p.name}</div>
+                        <div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>
+                          {p.sku || "No SKU"} · {p.category} · {p.location || "Store"}
+                        </div>
+                      </div>
+                      <Pill tone="red">0 {p.baseUnit}</Pill>
+                    </div>
+
+                    <div style={{ background: "var(--red-tint)", padding: "8px 10px", borderRadius: 8, margin: "8px 0", fontSize: 12 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 600, color: "var(--red)" }}>
+                        <span>Current Stock: 0 {p.baseUnit}</span>
+                        <span>Min Threshold: {p.minStock} {p.baseUnit}</span>
+                      </div>
+                    </div>
+
+                    <div style={{ fontSize: 12, color: "var(--ink)", marginBottom: 10 }}>
+                      <div><b>Supplier:</b> {supp?.name || "Unassigned"} {supp?.phone ? `(${supp.phone})` : ""}</div>
+                      <div><b>Suggested Reorder:</b> {recommendedPackages} {p.purchaseUnit} (= {recommendedPackages * factor} {p.baseUnit})</div>
+                      <div><b>Est. Cost:</b> <span className="mono text-profit" style={{ fontWeight: 700 }}>{fmt(estCost)}</span> (@ {fmt(packageCost)}/{p.purchaseUnit})</div>
+                    </div>
+
+                    <button
+                      type="button"
+                      className="hf-btn hf-btn-primary"
+                      style={{ width: "100%", justifyContent: "center", padding: "8px", fontSize: 12.5 }}
+                      onClick={() => onRestock({ supplierId: p.supplierId, productId: p.id, qty: recommendedPackages })}
+                    >
+                      <Truck size={14} /> Receive Stock Delivery
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* 2. LOW STOCK SECTION */}
+        {(activeTab === "all" || activeTab === "low") && filteredLowStock.length > 0 && (
+          <div className="hf-card" style={{ padding: "18px 20px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+              <div className="disp" style={{ fontSize: 18, fontWeight: 700, color: "var(--amber)", display: "flex", alignItems: "center", gap: 6 }}>
+                <AlertTriangle size={18} /> Warning: Low Stock Threshold ({filteredLowStock.length})
+              </div>
+              <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>Items running low — reorder before stockout</span>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
+              {filteredLowStock.map(p => {
+                const supp = (db.suppliers || []).find(s => s.id === p.supplierId);
+                const factor = Number(p.conversionFactor) > 0 ? Number(p.conversionFactor) : 1;
+                const currentStock = Math.max(0, Number(p.stock) || 0);
+                const minStock = Math.max(0, Number(p.minStock) || 0);
+                const deficitUnits = Math.max(1, (minStock * 2) - currentStock);
+                const recommendedPackages = Math.ceil(deficitUnits / factor);
+                const packageCost = Number(p.buyPrice) || 0;
+                const estCost = recommendedPackages * packageCost;
+                const percentage = Math.min(100, Math.round((currentStock / (minStock || 1)) * 100));
+
+                return (
+                  <div
+                    key={p.id}
+                    className="hf-ticket"
+                    style={{ padding: "14px 16px", background: "var(--surface)" }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: 15 }}>{p.name}</div>
+                        <div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>
+                          {p.sku || "No SKU"} · {p.category} · {p.location || "Store"}
+                        </div>
+                      </div>
+                      <Pill tone="amber">{p.stock} {p.baseUnit} LEFT</Pill>
+                    </div>
+
+                    {/* Visual Meter */}
+                    <div style={{ margin: "10px 0 8px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, marginBottom: 3 }}>
+                        <span style={{ color: "var(--ink-soft)" }}>Stock Meter: {p.stock} / {p.minStock} {p.baseUnit}</span>
+                        <span className="mono" style={{ fontWeight: 700, color: "var(--amber)" }}>{percentage}%</span>
+                      </div>
+                      <div style={{ height: 6, background: "var(--line)", borderRadius: 4, overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${percentage}%`, background: percentage <= 30 ? "var(--red)" : "var(--amber)", borderRadius: 4 }} />
+                      </div>
+                    </div>
+
+                    <div style={{ fontSize: 12, color: "var(--ink)", marginBottom: 10 }}>
+                      <div><b>Supplier:</b> {supp?.name || "Unassigned"} {supp?.phone ? `(${supp.phone})` : ""}</div>
+                      <div><b>Suggested Reorder:</b> {recommendedPackages} {p.purchaseUnit} (= {recommendedPackages * factor} {p.baseUnit})</div>
+                      <div><b>Est. Cost:</b> <span className="mono text-profit" style={{ fontWeight: 700 }}>{fmt(estCost)}</span> (@ {fmt(packageCost)}/{p.purchaseUnit})</div>
+                    </div>
+
+                    <button
+                      type="button"
+                      className="hf-btn hf-btn-ghost"
+                      style={{ width: "100%", justifyContent: "center", padding: "8px", fontSize: 12.5, borderColor: "var(--rust)", color: "var(--rust)" }}
+                      onClick={() => onRestock({ supplierId: p.supplierId, productId: p.id, qty: recommendedPackages })}
+                    >
+                      <Truck size={14} /> Receive Stock Delivery
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* 3. OVERDUE CUSTOMER DEBTS */}
+        {(activeTab === "all" || activeTab === "debts") && filteredCustomers.length > 0 && (
+          <div className="hf-card" style={{ padding: "18px 20px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+              <div className="disp" style={{ fontSize: 18, fontWeight: 700, color: "#7E22CE", display: "flex", alignItems: "center", gap: 6 }}>
+                <CreditCard size={18} /> Overdue Customer Credit Balances ({filteredCustomers.length})
+              </div>
+              <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>Credit accounts inactive &gt;25 days</span>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
+              {filteredCustomers.map(c => (
+                <div key={c.id} className="hf-ticket" style={{ padding: "14px 16px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 15 }}>{c.name}</div>
+                      <div style={{ fontSize: 12, color: "var(--ink-soft)" }}>{c.phone || "No phone registered"}</div>
+                    </div>
+                    <Pill tone="red">{c.days} DAYS OVERDUE</Pill>
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, margin: "10px 0 12px", padding: "8px 10px", background: "var(--surface-hover)", borderRadius: 8 }}>
+                    <div>
+                      <div className="hf-kpi-label">Debt Balance</div>
+                      <div className="mono text-loss" style={{ fontWeight: 700, fontSize: 15 }}>{fmt(c.balance)}</div>
+                    </div>
+                    <div>
+                      <div className="hf-kpi-label">Credit Limit</div>
+                      <div className="mono" style={{ fontWeight: 600, fontSize: 13 }}>{fmt(c.creditLimit)}</div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 6 }}>
+                    {c.phone && (
+                      <a
+                        href={`https://wa.me/${c.phone.replace(/[^0-9]/g, "")}?text=${encodeURIComponent(`Hello ${c.name}, this is HardwareFlow. Friendly reminder regarding your outstanding balance of ${fmt(c.balance)}. Kindly arrange payment at your earliest convenience.`)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="hf-btn hf-btn-ghost"
+                        style={{ flex: 1, justifyContent: "center", fontSize: 11.5, padding: "6px", color: "var(--green)", textDecoration: "none" }}
+                      >
+                        <PhoneCall size={13} /> WhatsApp
+                      </a>
+                    )}
+                    <button
+                      type="button"
+                      className="hf-btn hf-btn-ghost"
+                      style={{ flex: 1, justifyContent: "center", fontSize: 11.5, padding: "6px" }}
+                      onClick={() => onNavigate("customers")}
+                    >
+                      View Account →
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* 4. SUPPLIER PAYABLES */}
+        {(activeTab === "all" || activeTab === "suppliers") && filteredSuppliers.length > 0 && (
+          <div className="hf-card" style={{ padding: "18px 20px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+              <div className="disp" style={{ fontSize: 18, fontWeight: 700, color: "var(--steel)", display: "flex", alignItems: "center", gap: 6 }}>
+                <Building2 size={18} /> Supplier Balances Due ({filteredSuppliers.length})
+              </div>
+              <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>Outstanding payables to stock vendors</span>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
+              {filteredSuppliers.map(s => (
+                <div key={s.id} className="hf-ticket" style={{ padding: "14px 16px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 15 }}>{s.name}</div>
+                      <div style={{ fontSize: 12, color: "var(--ink-soft)" }}>{s.phone || "No phone"} · {s.terms}</div>
+                    </div>
+                    <Pill tone="steel">DUE</Pill>
+                  </div>
+
+                  <div style={{ margin: "10px 0 12px", padding: "8px 10px", background: "var(--surface-hover)", borderRadius: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div className="hf-kpi-label">Outstanding Payable</div>
+                    <div className="mono text-loss" style={{ fontWeight: 700, fontSize: 16 }}>{fmt(s.outstanding)}</div>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="hf-btn hf-btn-primary"
+                    style={{ width: "100%", justifyContent: "center", padding: "7px", fontSize: 12.5 }}
+                    onClick={() => onNavigate("suppliers")}
+                  >
+                    Settle Supplier Balance →
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ALL HEALTHY CLEAN STATE */}
+        {totalAlertsCount === 0 && (
+          <div className="hf-card" style={{ padding: 48, textAlign: "center", maxWidth: 520, margin: "40px auto" }}>
+            <CheckCircle2 size={42} color="var(--green)" style={{ margin: "0 auto 12px" }} />
+            <div className="disp" style={{ fontSize: 24, fontWeight: 700 }}>All Systems Optimal & Healthy</div>
+            <div style={{ color: "var(--ink-soft)", fontSize: 13.5, marginTop: 6, lineHeight: 1.5 }}>
+              All product stock levels are above warning thresholds, and there are no overdue customer debts or pending critical actions.
+            </div>
+            <button
+              type="button"
+              className="hf-btn hf-btn-primary"
+              style={{ marginTop: 18 }}
+              onClick={() => onNavigate("inventory")}
+            >
+              <Package size={15} /> View Full Inventory Catalog
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ================= APP SHELL ================= */
 const NAV = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard, roles: ["owner","cashier","storekeeper"] },
+  { key: "alerts", label: "Alerts & Reorders", icon: Bell, roles: ["owner","cashier","storekeeper"], hasBadge: true },
   { key: "pos", label: "Point of Sale", icon: ShoppingCart, roles: ["owner","cashier","storekeeper"] },
   { key: "inventory", label: "Inventory", icon: Package, roles: ["owner","cashier","storekeeper"] },
   { key: "receiving", label: "Receive Stock", icon: Truck, roles: ["owner","storekeeper"] },
@@ -4810,6 +5283,8 @@ export default function App() {
   const [page, setPage] = useState("dashboard");
   const [toasts, setToasts] = useState([]);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [showAlertsFlyout, setShowAlertsFlyout] = useState(false);
+  const [receivingPrefill, setReceivingPrefill] = useState(null);
 
   // Progressive Web App Install hook
   const { isInstallable, isInstalled, promptInstall } = usePWAInstall();
@@ -4836,6 +5311,24 @@ export default function App() {
   const [showUserMgmt, setShowUserMgmt] = useState(false);
   const [userDropdown, setUserDropdown] = useState(false);
 
+  // Active alerts calculation for topbar notification badge
+  const outOfStockItems = useMemo(() => {
+    return (db?.products || []).filter(p => (Number(p.stock) || 0) <= 0);
+  }, [db?.products]);
+
+  const lowStockItems = useMemo(() => {
+    return (db?.products || []).filter(p => (Number(p.stock) || 0) > 0 && (Number(p.stock) || 0) <= (Number(p.minStock) || 0));
+  }, [db?.products]);
+
+  const overdueCustomerDebts = useMemo(() => {
+    if (!db?.customers) return [];
+    return db.customers
+      .map(c => ({ ...c, balance: customerBalance(db, c.id), days: daysSinceLastActivity(db, c.id) }))
+      .filter(c => c.balance > 0 && c.days > 25);
+  }, [db?.customers, db?.sales]);
+
+  const totalAlertsCount = outOfStockItems.length + lowStockItems.length + overdueCustomerDebts.length;
+
   function toggleTheme() {
     const next = theme === "dark" ? "light" : "dark";
     setTheme(next);
@@ -4853,6 +5346,7 @@ export default function App() {
     setCurrentUser(null);
     localStorage.removeItem(AUTH_KEY);
     setUserDropdown(false);
+    setShowAlertsFlyout(false);
     notify("info", "Signed Out", "You have been securely logged out.");
   }
 
@@ -4860,6 +5354,12 @@ export default function App() {
     const safeUser = sanitizeUserForSession(updated);
     setCurrentUser(safeUser);
     localStorage.setItem(AUTH_KEY, JSON.stringify(safeUser));
+  }
+
+  function handleAlertRestock(prefillData) {
+    setReceivingPrefill(prefillData);
+    setPage("receiving");
+    setShowAlertsFlyout(false);
   }
 
   const notify = (type, message, detail) => {
@@ -4915,9 +5415,10 @@ export default function App() {
 
   const pages = {
     dashboard: <Dashboard db={db} role={role} notify={notify} />,
+    alerts: <Alerts db={db} setDb={setDb} notify={notify} role={role} onRestock={handleAlertRestock} onNavigate={(p) => setPage(p)} />,
     pos: <POS db={db} setDb={setDb} role={role} notify={notify} currentUser={currentUser} />,
     inventory: <Inventory db={db} setDb={setDb} role={role} notify={notify} currentUser={currentUser} />,
-    receiving: <Receiving db={db} setDb={setDb} notify={notify} currentUser={currentUser} />,
+    receiving: <Receiving db={db} setDb={setDb} notify={notify} currentUser={currentUser} prefill={receivingPrefill} onClearPrefill={() => setReceivingPrefill(null)} />,
     suppliers: <Suppliers db={db} setDb={setDb} notify={notify} currentUser={currentUser} />,
     customers: <Customers db={db} setDb={setDb} notify={notify} currentUser={currentUser} />,
     quotations: <Quotations db={db} setDb={setDb} notify={notify} currentUser={currentUser} />,
@@ -4969,6 +5470,8 @@ export default function App() {
           {NAV.map(item => {
             const Icon = item.icon;
             const ok = allowed(item);
+            const isAlertItem = item.key === "alerts";
+
             return (
               <div
                 key={item.key}
@@ -4980,6 +5483,18 @@ export default function App() {
               >
                 <Icon size={16} />
                 <span style={{ flex: 1 }}>{item.label}</span>
+                {isAlertItem && totalAlertsCount > 0 && (
+                  <span style={{
+                    background: outOfStockItems.length > 0 ? "var(--red)" : "var(--amber)",
+                    color: "#fff",
+                    borderRadius: 10,
+                    padding: "2px 7px",
+                    fontSize: 11,
+                    fontWeight: 700,
+                  }}>
+                    {totalAlertsCount}
+                  </span>
+                )}
                 {!ok && <Lock size={12} />}
               </div>
             );
@@ -5008,6 +5523,48 @@ export default function App() {
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {/* Mobile Notification Bell */}
+            <div style={{ position: "relative" }}>
+              <button
+                type="button"
+                onClick={() => setShowAlertsFlyout(!showAlertsFlyout)}
+                style={{
+                  background: "rgba(255,255,255,0.1)",
+                  border: "none",
+                  color: "#fff",
+                  padding: "6px 8px",
+                  borderRadius: 8,
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  position: "relative"
+                }}
+                title="Stock & Business Alerts"
+              >
+                <Bell size={16} color={totalAlertsCount > 0 ? "#F87171" : "#fff"} />
+                {totalAlertsCount > 0 && (
+                  <span style={{
+                    position: "absolute",
+                    top: -3,
+                    right: -3,
+                    background: outOfStockItems.length > 0 ? "var(--red)" : "var(--amber)",
+                    color: "#fff",
+                    borderRadius: "50%",
+                    width: 16,
+                    height: 16,
+                    fontSize: 9.5,
+                    fontWeight: 800,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}>
+                    {totalAlertsCount}
+                  </span>
+                )}
+              </button>
+            </div>
+
             {/* Mobile PWA Install Prompt Button */}
             {isInstallable && !isInstalled && (
               <button
@@ -5064,8 +5621,125 @@ export default function App() {
         }}>
           <div className="disp" style={{ fontWeight: 700, fontSize: 18 }}>{currentNav?.label}</div>
 
-          {/* Top-Right Controls: PWA Install, Theme Toggle & User Account Dropdown */}
+          {/* Top-Right Controls: Alerts Bell, PWA Install, Theme Toggle & User Account Dropdown */}
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            {/* Desktop Notification Bell with Flyout */}
+            <div style={{ position: "relative" }}>
+              <button
+                type="button"
+                onClick={() => setShowAlertsFlyout(!showAlertsFlyout)}
+                className="hf-btn hf-btn-ghost"
+                style={{
+                  position: "relative",
+                  padding: "7px 10px",
+                  borderRadius: 10,
+                  background: totalAlertsCount > 0 ? "var(--rust-tint)" : undefined,
+                  borderColor: totalAlertsCount > 0 ? "var(--rust)" : undefined
+                }}
+                title={`${totalAlertsCount} active stock & credit alerts`}
+              >
+                <Bell size={16} color={totalAlertsCount > 0 ? "var(--rust)" : "var(--ink-soft)"} />
+                {totalAlertsCount > 0 && (
+                  <span style={{
+                    position: "absolute",
+                    top: -4,
+                    right: -4,
+                    background: outOfStockItems.length > 0 ? "var(--red)" : "var(--amber)",
+                    color: "#fff",
+                    borderRadius: "50%",
+                    width: 18,
+                    height: 18,
+                    fontSize: 10,
+                    fontWeight: 800,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    boxShadow: "0 2px 6px rgba(0,0,0,0.25)"
+                  }}>
+                    {totalAlertsCount}
+                  </span>
+                )}
+              </button>
+
+              {/* Alerts Quick Dropdown Flyout */}
+              {showAlertsFlyout && (
+                <div
+                  className="hf-card"
+                  style={{
+                    position: "absolute",
+                    right: 0,
+                    top: "100%",
+                    marginTop: 8,
+                    width: 350,
+                    maxWidth: "92vw",
+                    padding: "16px 14px",
+                    zIndex: 1100,
+                    boxShadow: "var(--shadow-lg)",
+                  }}
+                  onClick={e => e.stopPropagation()}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, borderBottom: "1px solid var(--line)", paddingBottom: 8 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13.5, display: "flex", alignItems: "center", gap: 6 }}>
+                      <BellRing size={15} color="var(--rust)" />
+                      <span>Stock & Business Alerts</span>
+                    </div>
+                    <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>{totalAlertsCount} items</span>
+                  </div>
+
+                  {totalAlertsCount === 0 ? (
+                    <div style={{ textAlign: "center", padding: "18px 8px", color: "var(--green)", fontSize: 12.5 }}>
+                      <CheckCircle2 size={24} style={{ margin: "0 auto 6px" }} />
+                      <div>All stock levels healthy! No active alerts.</div>
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 250, overflowY: "auto" }}>
+                      {outOfStockItems.slice(0, 3).map(p => (
+                        <div
+                          key={p.id}
+                          onClick={() => handleAlertRestock({ supplierId: p.supplierId, productId: p.id, qty: 1 })}
+                          style={{ padding: "8px 10px", background: "var(--red-tint)", border: "1px solid var(--red)", borderRadius: 8, fontSize: 12, cursor: "pointer" }}
+                        >
+                          <div style={{ fontWeight: 700, color: "var(--red)" }}>🚨 Out of Stock: {p.name}</div>
+                          <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 2 }}>0 {p.baseUnit} in stock · Click to restock</div>
+                        </div>
+                      ))}
+                      {lowStockItems.slice(0, 2).map(p => (
+                        <div
+                          key={p.id}
+                          onClick={() => handleAlertRestock({ supplierId: p.supplierId, productId: p.id, qty: 1 })}
+                          style={{ padding: "8px 10px", background: "var(--amber-tint)", border: "1px solid var(--amber)", borderRadius: 8, fontSize: 12, cursor: "pointer" }}
+                        >
+                          <div style={{ fontWeight: 700, color: "var(--amber)" }}>⚠️ Low Stock: {p.name}</div>
+                          <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 2 }}>{p.stock} of {p.minStock} {p.baseUnit} remaining</div>
+                        </div>
+                      ))}
+                      {overdueCustomerDebts.slice(0, 2).map(c => (
+                        <div
+                          key={c.id}
+                          onClick={() => { setPage("customers"); setShowAlertsFlyout(false); }}
+                          style={{ padding: "8px 10px", background: "var(--surface-hover)", border: "1px solid var(--line)", borderRadius: 8, fontSize: 12, cursor: "pointer" }}
+                        >
+                          <div style={{ fontWeight: 700, color: "var(--ink)" }}>⏳ Overdue Debt: {c.name}</div>
+                          <div style={{ fontSize: 11, color: "var(--red)", marginTop: 2 }}>Owes {fmt(c.balance)} ({c.days} days inactive)</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div style={{ borderTop: "1px solid var(--line)", marginTop: 10, paddingTop: 10 }}>
+                    <button
+                      type="button"
+                      className="hf-btn hf-btn-primary"
+                      style={{ width: "100%", justifyContent: "center", fontSize: 12, padding: "8px" }}
+                      onClick={() => { setPage("alerts"); setShowAlertsFlyout(false); }}
+                    >
+                      Open Alerts & Reorders Center <ArrowRight size={13} />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* Desktop PWA Install Button */}
             {isInstallable && !isInstalled && (
               <button
