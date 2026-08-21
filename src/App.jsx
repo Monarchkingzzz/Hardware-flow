@@ -68,6 +68,58 @@ function uid(prefix) {
   return prefix + "-" + Math.random().toString(36).slice(2, 8).toUpperCase();
 }
 
+/* ---------- Accurate Stock Valuation & Inventory Metrics Helpers ---------- */
+function getProductUnitCost(p) {
+  if (!p) return 0;
+  const factor = Number(p.conversionFactor) > 0 ? Number(p.conversionFactor) : 1;
+  const buy = Number(p.buyPrice) || 0;
+  return buy / factor;
+}
+
+function getProductStockCost(p) {
+  if (!p) return 0;
+  const stock = Math.max(0, Number(p.stock) || 0);
+  return stock * getProductUnitCost(p);
+}
+
+function getProductStockRetail(p) {
+  if (!p) return 0;
+  const stock = Math.max(0, Number(p.stock) || 0);
+  return stock * (Number(p.sellPrice) || 0);
+}
+
+function getInventoryMetrics(products = []) {
+  let totalStockCost = 0;
+  let totalStockRetail = 0;
+  let totalUnits = 0;
+  let lowStockCount = 0;
+
+  products.forEach(p => {
+    const stock = Math.max(0, Number(p.stock) || 0);
+    const unitCost = getProductUnitCost(p);
+    const sellPrice = Number(p.sellPrice) || 0;
+    totalUnits += stock;
+    totalStockCost += stock * unitCost;
+    totalStockRetail += stock * sellPrice;
+    if (stock <= (Number(p.minStock) || 0)) {
+      lowStockCount += 1;
+    }
+  });
+
+  const potentialMargin = Math.max(0, totalStockRetail - totalStockCost);
+  const marginPct = totalStockRetail > 0 ? Math.round((potentialMargin / totalStockRetail) * 100) : 0;
+
+  return {
+    totalUnits,
+    totalProducts: products.length,
+    totalStockCost,
+    totalStockRetail,
+    potentialMargin,
+    marginPct,
+    lowStockCount,
+  };
+}
+
 function buildSeed() {
   const users = [
     { id: "u1", username: "owner", password: "admin123", name: "Shop Owner", role: "owner", phone: "0722 000 111", pin: "8888" },
@@ -359,11 +411,13 @@ const GlobalStyle = ({ theme }) => {
         --shadow-sm: 0 1px 2px ${isDark ? "rgba(0,0,0,0.3)" : "rgba(20,24,30,0.05)"};
         --shadow-md: 0 4px 16px -4px ${isDark ? "rgba(0,0,0,0.4)" : "rgba(20,24,30,0.10)"};
         --shadow-lg: 0 20px 48px -12px ${isDark ? "rgba(0,0,0,0.6)" : "rgba(20,24,30,0.22)"};
-        font-family: 'Inter', sans-serif;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         color: var(--ink);
         background: var(--bg);
         -webkit-font-smoothing: antialiased;
         transition: background .2s ease, color .2s ease;
+        width: 100%;
+        min-height: 100vh;
       }
       .hf-root .disp { font-family: 'Barlow Condensed', sans-serif; letter-spacing: 0.01em; }
       .hf-root .mono { font-family: 'IBM Plex Mono', monospace; font-feature-settings: "tnum"; }
@@ -389,6 +443,7 @@ const GlobalStyle = ({ theme }) => {
         display: inline-flex; align-items: center; gap: 6px;
         transition: filter .14s ease, transform .06s ease, box-shadow .14s ease, background .14s ease;
         font-family: 'Inter', sans-serif;
+        user-select: none;
       }
       .hf-btn:active { transform: translateY(1px) scale(0.99); }
       .hf-btn:disabled { opacity: .45; cursor: not-allowed; }
@@ -401,10 +456,11 @@ const GlobalStyle = ({ theme }) => {
       .hf-btn-danger { background: var(--red); color: #fff; }
       .hf-btn-danger:hover { filter: brightness(1.1); }
       .hf-input {
-        border: 1.5px solid var(--line); border-radius: 9px; padding: 9px 11px;
-        font-size: 13.5px; font-family: 'Inter', sans-serif; width: 100%;
+        border: 1.5px solid var(--line); border-radius: 9px; padding: 10px 12px;
+        font-size: 14px; font-family: 'Inter', sans-serif; width: 100%;
         background: ${isDark ? "#0E1118" : "#fff"}; color: var(--ink);
         transition: border-color .14s ease, box-shadow .14s ease, background .14s ease;
+        box-sizing: border-box;
       }
       .hf-input:focus { outline: none; border-color: var(--rust); box-shadow: 0 0 0 3.5px var(--rust-tint); }
       .hf-input:hover:not(:focus) { border-color: ${isDark ? "#3A455A" : "#C9CDD3"}; }
@@ -434,78 +490,123 @@ const GlobalStyle = ({ theme }) => {
       .text-profit { color: var(--green) !important; }
       .text-loss { color: var(--red) !important; }
 
-      /* Mobile Phone Optimization & Responsive Layout */
-      .hf-mobile-header {
-        display: none;
+      /* Valuation Summary Banner */
+      .hf-stock-banner {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 12px;
+        margin-bottom: 20px;
       }
-      .hf-mobile-bottomnav {
-        display: none;
-      }
-      .hf-mobile-backdrop {
-        display: none;
-      }
+
+      /* Desktop vs Mobile component toggles */
+      .hf-desktop-only { display: block; }
+      .hf-mobile-only { display: none; }
+      .hf-mobile-header { display: none; }
+      .hf-mobile-bottomnav { display: none; }
+      .hf-mobile-backdrop { display: none; }
+
       .hf-table-responsive {
         width: 100%;
         overflow-x: auto;
         -webkit-overflow-scrolling: touch;
       }
 
+      /* Grid helpers */
+      .hf-field-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+
+      .hf-kpis-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+        gap: 12px;
+        margin-bottom: 22px;
+      }
+
+      .hf-cashbook-summary {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 12px;
+        margin-bottom: 20px;
+      }
+
+      .hf-two-col {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+      }
+
+      /* Mobile Phone Optimization (Screen width <= 768px) */
       @media (max-width: 768px) {
+        .hf-desktop-only { display: none !important; }
+        .hf-mobile-only { display: block !important; }
+
         .hf-mobile-header {
           display: flex;
           align-items: center;
           justify-content: space-between;
-          padding: 10px 14px;
+          padding: max(10px, env(safe-area-inset-top, 10px)) 14px 10px;
           background: var(--tab-bg);
           color: #fff;
           position: sticky;
           top: 0;
           z-index: 900;
           border-bottom: 1px solid rgba(255,255,255,0.08);
+          box-shadow: 0 2px 10px rgba(0,0,0,0.2);
         }
+
         .hf-mobile-backdrop {
           display: block;
           position: fixed;
           inset: 0;
           background: rgba(0,0,0,0.65);
-          backdrop-filter: blur(2px);
+          backdrop-filter: blur(3px);
           z-index: 1000;
         }
+
         .hf-sidebar {
           position: fixed !important;
           top: 0;
           left: 0;
           bottom: 0;
-          width: 270px !important;
+          width: 280px !important;
           z-index: 1100;
           transform: translateX(-100%);
-          transition: transform .22s ease-in-out;
-          box-shadow: 0 0 30px rgba(0,0,0,0.5);
+          transition: transform .24s cubic-bezier(0.4, 0, 0.2, 1);
+          box-shadow: 0 0 35px rgba(0,0,0,0.6);
+          padding-top: max(20px, env(safe-area-inset-top, 20px)) !important;
         }
         .hf-sidebar.open {
           transform: translateX(0) !important;
         }
+
         .hf-desktop-topbar {
           display: none !important;
         }
+
         .hf-main-content-wrap {
-          padding: 14px 12px 85px !important;
+          padding: 14px 12px calc(80px + env(safe-area-inset-bottom, 0px)) !important;
+          -webkit-overflow-scrolling: touch;
         }
+
         .hf-mobile-bottomnav {
           display: flex;
           position: fixed;
           bottom: 0;
           left: 0;
           right: 0;
-          height: 60px;
+          height: calc(60px + env(safe-area-inset-bottom, 0px));
+          padding-bottom: env(safe-area-inset-bottom, 0px);
           background: var(--surface);
-          border-top: 1px solid var(--line);
+          border-top: 1.5px solid var(--line);
           z-index: 950;
           justify-content: space-around;
           align-items: center;
-          padding: 0 4px;
-          box-shadow: 0 -4px 16px rgba(0,0,0,0.06);
+          box-shadow: 0 -4px 20px rgba(0,0,0,0.08);
         }
+
         .hf-bottom-item {
           display: flex;
           flex-direction: column;
@@ -515,25 +616,83 @@ const GlobalStyle = ({ theme }) => {
           flex: 1;
           height: 100%;
           color: var(--ink-soft);
-          font-size: 10px;
+          font-size: 11px;
           font-weight: 600;
           cursor: pointer;
           border: none;
           background: transparent;
+          padding: 6px 0;
+          -webkit-tap-highlight-color: transparent;
         }
         .hf-bottom-item.active {
           color: var(--rust);
+          font-weight: 700;
         }
+
+        .hf-stock-banner {
+          grid-template-columns: 1fr 1fr !important;
+          gap: 8px !important;
+        }
+
+        .hf-kpis-grid {
+          grid-template-columns: repeat(2, 1fr) !important;
+          gap: 8px !important;
+          margin-bottom: 16px !important;
+        }
+
+        .hf-cashbook-summary {
+          grid-template-columns: 1fr !important;
+          gap: 8px !important;
+        }
+
+        .hf-two-col {
+          grid-template-columns: 1fr !important;
+          gap: 12px !important;
+        }
+
+        .hf-field-grid {
+          grid-template-columns: 1fr !important;
+          gap: 10px !important;
+        }
+
         .hf-ticket {
           padding: 12px 14px !important;
-          min-height: 96px !important;
+          min-height: 90px !important;
           height: auto !important;
         }
+
         .hf-card {
-          border-radius: 10px;
+          border-radius: 12px;
         }
+
         .hf-btn {
-          min-height: 40px;
+          min-height: 44px;
+          font-size: 14px;
+        }
+
+        .hf-input {
+          font-size: 16px !important; /* Prevents auto-zoom in iOS Safari */
+          min-height: 44px;
+          padding: 10px 12px;
+        }
+
+        /* Mobile Modal Bottom Sheet */
+        .hf-modal-card {
+          width: 100% !important;
+          max-width: 100% !important;
+          max-height: 90vh !important;
+          border-radius: 20px 20px 0 0 !important;
+          margin-top: auto !important;
+          padding: 20px 16px calc(24px + env(safe-area-inset-bottom, 0px)) !important;
+        }
+      }
+
+      @media (max-width: 480px) {
+        .hf-stock-banner {
+          grid-template-columns: 1fr !important;
+        }
+        .hf-kpis-grid {
+          grid-template-columns: 1fr 1fr !important;
         }
       }
     `}</style>
@@ -617,7 +776,7 @@ function Dashboard({ db, role, notify }) {
   const suppBalances = db.suppliers.map(s => ({ ...s, outstanding: supplierOutstanding(db, s.id) }));
   const totalSupplierBal = suppBalances.reduce((a, s) => a + s.outstanding, 0);
 
-  const stockValueCorrect = db.products.reduce((a, p) => a + p.stock * (p.buyPrice / (p.conversionFactor || 1)), 0);
+  const inventoryMetrics = useMemo(() => getInventoryMetrics(db.products), [db.products]);
   const lowStock = db.products.filter(p => p.stock <= p.minStock);
   const slowMoving = db.products.filter(p => !db.sales.some(s => s.items.some(i => i.productId === p.id) && s.date >= todayISO(-14)));
 
@@ -766,13 +925,33 @@ function Dashboard({ db, role, notify }) {
       sub: "Pending supplier dues",
     },
     {
-      label: "Stock Value",
-      value: fmt(stockValueCorrect),
+      label: "Stock Cost Value",
+      value: fmt(inventoryMetrics.totalStockCost),
       tone: "ink",
       ownerOnly: true,
       icon: Package,
-      rawVal: stockValueCorrect,
-      sub: "Total inventory cost base",
+      rawVal: inventoryMetrics.totalStockCost,
+      sub: `${inventoryMetrics.totalUnits.toLocaleString()} units · Cost basis`,
+    },
+    {
+      label: "Retail Stock Value",
+      value: fmt(inventoryMetrics.totalStockRetail),
+      tone: "green",
+      ownerOnly: true,
+      icon: Package,
+      valColor: "var(--green)",
+      rawVal: inventoryMetrics.totalStockRetail,
+      sub: `${inventoryMetrics.totalProducts} active products · Sales value`,
+    },
+    {
+      label: "Locked Stock Profit",
+      value: "+" + fmt(inventoryMetrics.potentialMargin),
+      tone: "green",
+      ownerOnly: true,
+      icon: TrendingUp,
+      valColor: "var(--green)",
+      rawVal: inventoryMetrics.potentialMargin,
+      sub: `${inventoryMetrics.marginPct}% margin in stock`,
     },
   ];
 
@@ -818,7 +997,7 @@ function Dashboard({ db, role, notify }) {
                 type="button"
                 onClick={() => setPeriod(p.key)}
                 style={{
-                  padding: "5px 12px",
+                  padding: "6px 12px",
                   fontSize: 12,
                   fontWeight: isActive ? 700 : 500,
                   borderRadius: 7,
@@ -837,8 +1016,8 @@ function Dashboard({ db, role, notify }) {
         </div>
       </div>
 
-      {/* KPI Cards Grid with Perfect Straight Line Alignment & Subtitles */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 12, marginBottom: 22 }}>
+      {/* KPI Cards Grid with Perfect Responsive Mobile and Desktop Layout */}
+      <div className="hf-kpis-grid">
         {kpis.map((k, i) => {
           const hidden = k.ownerOnly && role !== "owner";
           const tc = toneColors[k.tone] || toneColors.ink;
@@ -1570,7 +1749,8 @@ function POS({ db, setDb, role, notify, currentUser }) {
               </div>
             )}
 
-            <div className="hf-card hf-table-responsive" style={{ padding: 4 }}>
+            {/* 1. Desktop Cart Table */}
+            <div className="hf-card hf-desktop-only" style={{ padding: 4 }}>
               <table className="hf-table">
                 <thead>
                   <tr>
@@ -1585,7 +1765,7 @@ function POS({ db, setDb, role, notify, currentUser }) {
                   {lines.length === 0 && (
                     <tr>
                       <td colSpan={5} style={{ textAlign: "center", color: "var(--ink-soft)", padding: 28 }}>
-                        Cart is empty — type a product name or SKU above to add.
+                        Cart is empty — search a product above to add.
                       </td>
                     </tr>
                   )}
@@ -1657,6 +1837,101 @@ function POS({ db, setDb, role, notify, currentUser }) {
                   })}
                 </tbody>
               </table>
+            </div>
+
+            {/* 2. Mobile Cart Cards (Thumb-Friendly Touch Layout for Smartphones) */}
+            <div className="hf-mobile-only" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {lines.length === 0 && (
+                <div className="hf-card" style={{ padding: 24, textAlign: "center", color: "var(--ink-soft)" }}>
+                  Cart is empty — search a product above to add.
+                </div>
+              )}
+              {lines.map(l => {
+                const stockCount = l.product?.stock || 0;
+                const isOver = (Number(l.qty) || 0) > stockCount;
+                const isZero = (Number(l.qty) || 0) <= 0;
+
+                return (
+                  <div
+                    key={l.productId}
+                    className="hf-card"
+                    style={{
+                      padding: "12px",
+                      borderLeft: isOver ? "4px solid var(--red)" : "1px solid var(--line)",
+                      background: isOver ? "var(--red-tint)" : "var(--surface)",
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: 14.5, color: isOver ? "var(--red)" : "var(--ink)" }}>{l.product?.name}</div>
+                        <div style={{ fontSize: 11.5, color: isOver ? "var(--red)" : "var(--ink-soft)", marginTop: 2 }}>
+                          Available: <strong>{stockCount} {l.product?.baseUnit}</strong> · {fmt(l.unitPrice)} ea
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => removeItem(l.productId)}
+                        style={{ background: "none", border: "none", cursor: "pointer", padding: "6px 8px" }}
+                        title="Remove"
+                      >
+                        <Trash2 size={16} color="var(--red)" />
+                      </button>
+                    </div>
+
+                    {isOver && (
+                      <div style={{ fontSize: 11, color: "var(--red)", fontWeight: 700, marginTop: 4 }}>
+                        ⚠ Requested quantity exceeds stock on hand!
+                      </div>
+                    )}
+
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10, paddingTop: 8, borderTop: "1px solid var(--line-soft)" }}>
+                      {/* Touch-Friendly Stepper */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <button
+                          className="hf-btn hf-btn-ghost"
+                          style={{ width: 38, height: 38, padding: 0, justifyContent: "center", borderRadius: 8 }}
+                          onClick={() => decrementQty(l.productId)}
+                          type="button"
+                        >
+                          <Minus size={16} />
+                        </button>
+                        <input
+                          className="hf-input mono"
+                          style={{
+                            width: 64,
+                            height: 38,
+                            textAlign: "center",
+                            padding: "4px",
+                            fontWeight: 700,
+                            fontSize: 16,
+                            border: isOver || isZero ? "1.5px solid var(--red)" : "1.5px solid var(--line)",
+                          }}
+                          type="number"
+                          min="1"
+                          max={stockCount}
+                          value={l.qtyInput !== undefined ? l.qtyInput : l.qty}
+                          onChange={e => handleQtyChange(l.productId, e.target.value)}
+                          onBlur={() => handleQtyBlur(l.productId)}
+                        />
+                        <button
+                          className="hf-btn hf-btn-ghost"
+                          style={{ width: 38, height: 38, padding: 0, justifyContent: "center", borderRadius: 8 }}
+                          onClick={() => incrementQty(l.productId)}
+                          disabled={Number(l.qty) >= stockCount}
+                          type="button"
+                        >
+                          <Plus size={16} />
+                        </button>
+                      </div>
+
+                      {/* Line Total */}
+                      <div style={{ textAlign: "right" }}>
+                        <div style={{ fontSize: 10.5, color: "var(--ink-soft)", textTransform: "uppercase", fontWeight: 700 }}>Line Total</div>
+                        <div className="mono text-profit" style={{ fontSize: 16, fontWeight: 700 }}>{fmt(l.lineTotal)}</div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
 
@@ -2045,7 +2320,13 @@ function Inventory({ db, setDb, role, notify, currentUser }) {
   const [showNew, setShowNew] = useState(false);
   const canSeeCost = role === "owner" || role === "storekeeper";
 
-  const filtered = db.products.filter(p => p.name.toLowerCase().includes(query.toLowerCase()) || p.sku.toLowerCase().includes(query.toLowerCase()));
+  const metrics = useMemo(() => getInventoryMetrics(db.products), [db.products]);
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return db.products;
+    return db.products.filter(p => (p.name || "").toLowerCase().includes(q) || (p.sku || "").toLowerCase().includes(q) || (p.category || "").toLowerCase().includes(q));
+  }, [db.products, query]);
+
   const activeProduct = selected ? db.products.find(p => p.id === selected) : null;
 
   function addProduct(form) {
@@ -2059,7 +2340,7 @@ function Inventory({ db, setDb, role, notify, currentUser }) {
       description: form.description || "",
       baseUnit: form.baseUnit || "piece",
       purchaseUnit: form.purchaseUnit || form.baseUnit || "piece",
-      conversionFactor: Number(form.conversionFactor) || 1,
+      conversionFactor: Number(form.conversionFactor) > 0 ? Number(form.conversionFactor) : 1,
       buyPrice: Number(form.buyPrice) || 0,
       sellPrice: Number(form.sellPrice) || 0,
       contractorPrice: Number(form.contractorPrice) || 0,
@@ -2084,7 +2365,7 @@ function Inventory({ db, setDb, role, notify, currentUser }) {
           role: role === "owner" ? "Owner" : "Storekeeper",
           category: "Product",
           action: `Added new product: ${p.name}`,
-          detail: `SKU: ${p.sku} · Stock: ${p.stock} ${p.baseUnit}`,
+          detail: `SKU: ${p.sku} · Stock: ${p.stock} ${p.baseUnit} · Cost: ${fmt(getProductUnitCost(p))}`,
           target: p.name,
         },
         ...prev.auditLog
@@ -2134,9 +2415,15 @@ function Inventory({ db, setDb, role, notify, currentUser }) {
 
   return (
     <div>
+      {/* Header & Actions */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
-        <div className="disp" style={{ fontSize: 26, fontWeight: 700 }}>Inventory</div>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div>
+          <div className="disp" style={{ fontSize: 28, fontWeight: 700 }}>Real-Time Stock & Inventory</div>
+          <div style={{ color: "var(--ink-soft)", fontSize: 13, marginTop: 2 }}>
+            Live stock counts, cost valuations, and retail margin tracking.
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button className="hf-btn hf-btn-ghost" onClick={downloadPDF}>
             <Download size={15} /> Download PDF
           </button>
@@ -2146,12 +2433,77 @@ function Inventory({ db, setDb, role, notify, currentUser }) {
         </div>
       </div>
 
-      <div style={{ position: "relative", marginBottom: 12, maxWidth: 340 }}>
-        <Search size={15} style={{ position: "absolute", left: 10, top: 11, color: "var(--ink-soft)" }} />
-        <input className="hf-input" style={{ paddingLeft: 32 }} placeholder="Search products by name or SKU…" value={query} onChange={e => setQuery(e.target.value)} />
+      {/* Executive Real-Time Stock Valuation Banner */}
+      <div className="hf-stock-banner">
+        <div className="hf-ticket" style={{ padding: "14px 16px" }}>
+          <div className="hf-kpi-label">Active Stock Items</div>
+          <div className="mono" style={{ fontSize: 21, fontWeight: 700, marginTop: 4 }}>
+            {metrics.totalUnits.toLocaleString()} <span style={{ fontSize: 13, fontWeight: 500, color: "var(--ink-soft)" }}>units</span>
+          </div>
+          <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 2 }}>
+            {metrics.totalProducts} catalog products
+          </div>
+        </div>
+
+        {canSeeCost ? (
+          <div className="hf-ticket" style={{ padding: "14px 16px" }}>
+            <div className="hf-kpi-label">Total Stock Cost Value</div>
+            <div className="mono" style={{ fontSize: 21, fontWeight: 700, marginTop: 4, color: "var(--ink)" }}>
+              {fmt(metrics.totalStockCost)}
+            </div>
+            <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 2 }}>
+              Total inventory cost basis
+            </div>
+          </div>
+        ) : (
+          <div className="hf-ticket" style={{ padding: "14px 16px" }}>
+            <div className="hf-kpi-label">Low Stock Alerts</div>
+            <div className="mono" style={{ fontSize: 21, fontWeight: 700, marginTop: 4, color: metrics.lowStockCount > 0 ? "var(--red)" : "var(--green)" }}>
+              {metrics.lowStockCount} <span style={{ fontSize: 13, fontWeight: 500 }}>items</span>
+            </div>
+            <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 2 }}>
+              {metrics.lowStockCount > 0 ? "Replenishment required" : "All levels adequate"}
+            </div>
+          </div>
+        )}
+
+        <div className="hf-ticket" style={{ padding: "14px 16px" }}>
+          <div className="hf-kpi-label">Total Retail Sales Value</div>
+          <div className="mono text-profit" style={{ fontSize: 21, fontWeight: 700, marginTop: 4 }}>
+            {fmt(metrics.totalStockRetail)}
+          </div>
+          <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 2 }}>
+            Expected retail revenue
+          </div>
+        </div>
+
+        {canSeeCost && (
+          <div className="hf-ticket" style={{ padding: "14px 16px" }}>
+            <div className="hf-kpi-label">Locked Stock Profit</div>
+            <div className="mono text-profit" style={{ fontSize: 21, fontWeight: 700, marginTop: 4 }}>
+              +{fmt(metrics.potentialMargin)}
+            </div>
+            <div style={{ fontSize: 11, color: "var(--green)", marginTop: 2, fontWeight: 600 }}>
+              {metrics.marginPct}% potential gross margin
+            </div>
+          </div>
+        )}
       </div>
 
-      <div className="hf-card" style={{ overflowX: "auto" }}>
+      {/* Search Filter */}
+      <div style={{ position: "relative", marginBottom: 14, maxWidth: 360 }}>
+        <Search size={15} style={{ position: "absolute", left: 11, top: 13, color: "var(--ink-soft)" }} />
+        <input
+          className="hf-input"
+          style={{ paddingLeft: 34 }}
+          placeholder="Search products by name, SKU, or category…"
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+        />
+      </div>
+
+      {/* 1. Desktop Table View */}
+      <div className="hf-card hf-desktop-only" style={{ overflowX: "auto" }}>
         <table className="hf-table">
           <thead>
             <tr>
@@ -2159,16 +2511,20 @@ function Inventory({ db, setDb, role, notify, currentUser }) {
               <th>Category</th>
               <th>Stock on Hand</th>
               <th>Min Alert</th>
-              {canSeeCost && <th>Buying Price</th>}
+              {canSeeCost && <th>Buying Cost</th>}
               <th>Selling Price</th>
+              {canSeeCost && <th style={{ textAlign: "right" }}>Total Cost Value</th>}
               <th>Supplier</th>
               <th style={{ width: 40 }}></th>
             </tr>
           </thead>
           <tbody>
             {filtered.map(p => {
-              const low = p.stock <= p.minStock;
+              const low = (p.stock || 0) <= (p.minStock || 0);
               const supplier = db.suppliers.find(s => s.id === p.supplierId);
+              const unitCost = getProductUnitCost(p);
+              const stockVal = getProductStockCost(p);
+
               return (
                 <tr key={p.id} onClick={() => setSelected(p.id)} style={{ cursor: "pointer" }}>
                   <td>
@@ -2182,9 +2538,17 @@ function Inventory({ db, setDb, role, notify, currentUser }) {
                   </td>
                   <td className="mono" style={{ color: "var(--ink-soft)" }}>{p.minStock}</td>
                   {canSeeCost && (
-                    <td className="mono">{fmt(p.buyPrice)}<span style={{ color: "var(--ink-soft)", fontSize: 11 }}>/{p.purchaseUnit}</span></td>
+                    <td className="mono">
+                      {fmt(unitCost)}
+                      <span style={{ color: "var(--ink-soft)", fontSize: 11 }}>/{p.baseUnit}</span>
+                    </td>
                   )}
                   <td className="mono text-profit" style={{ fontWeight: 600 }}>{fmt(p.sellPrice)}</td>
+                  {canSeeCost && (
+                    <td className="mono" style={{ textAlign: "right", fontWeight: 700 }}>
+                      {fmt(stockVal)}
+                    </td>
+                  )}
                   <td>{supplier?.name || "—"}</td>
                   <td><ChevronRight size={15} color="var(--ink-soft)" /></td>
                 </tr>
@@ -2192,13 +2556,89 @@ function Inventory({ db, setDb, role, notify, currentUser }) {
             })}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={canSeeCost ? 8 : 7} style={{ textAlign: "center", color: "var(--ink-soft)", padding: 28 }}>
+                <td colSpan={canSeeCost ? 9 : 7} style={{ textAlign: "center", color: "var(--ink-soft)", padding: 28 }}>
                   No inventory products match "{query}".
                 </td>
               </tr>
             )}
           </tbody>
         </table>
+      </div>
+
+      {/* 2. Mobile Card List View (Thumb-Friendly for Smartphones) */}
+      <div className="hf-mobile-only" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {filtered.map(p => {
+          const low = (p.stock || 0) <= (p.minStock || 0);
+          const supplier = db.suppliers.find(s => s.id === p.supplierId);
+          const unitCost = getProductUnitCost(p);
+          const stockCostVal = getProductStockCost(p);
+          const stockRetailVal = getProductStockRetail(p);
+
+          return (
+            <div
+              key={p.id}
+              className="hf-card"
+              onClick={() => setSelected(p.id)}
+              style={{
+                padding: "14px",
+                cursor: "pointer",
+                borderLeft: low ? "4px solid var(--red)" : "1px solid var(--line)",
+                transition: "transform .12s ease",
+              }}
+            >
+              {/* Top Row: Name + Category */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 15, color: "var(--ink)" }}>{p.name}</div>
+                  <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginTop: 1 }}>
+                    {p.sku} {p.brand ? `· ${p.brand}` : ""} · <span style={{ color: "var(--steel)" }}>{p.location || "Store"}</span>
+                  </div>
+                </div>
+                <Pill tone="ink">{p.category}</Pill>
+              </div>
+
+              {/* Middle Row: Stock Count + Low Alert */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "var(--surface-hover)", padding: "8px 10px", borderRadius: 8, margin: "8px 0" }}>
+                <div>
+                  <span style={{ fontSize: 11, color: "var(--ink-soft)", textTransform: "uppercase", fontWeight: 700, letterSpacing: "0.04em" }}>Stock on Hand: </span>
+                  <strong className="mono" style={{ fontSize: 15, color: low ? "var(--red)" : "var(--ink)" }}>
+                    {p.stock} {p.baseUnit}
+                  </strong>
+                </div>
+                {low ? (
+                  <Pill tone="red">LOW STOCK</Pill>
+                ) : (
+                  <span style={{ fontSize: 11, color: "var(--green)", fontWeight: 600 }}>✓ In Stock</span>
+                )}
+              </div>
+
+              {/* Bottom Row: Valuation & Prices */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12.5 }}>
+                <div>
+                  <span style={{ color: "var(--ink-soft)" }}>Retail: </span>
+                  <strong className="mono text-profit" style={{ fontSize: 13.5 }}>{fmt(p.sellPrice)}</strong>
+                  {canSeeCost && (
+                    <span style={{ marginLeft: 8, color: "var(--ink-soft)", fontSize: 11.5 }}>
+                      Cost: <span className="mono">{fmt(unitCost)}</span>
+                    </span>
+                  )}
+                </div>
+                {canSeeCost && (
+                  <div style={{ textAlign: "right" }}>
+                    <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>Total Val: </span>
+                    <strong className="mono" style={{ fontSize: 13.5, color: "var(--ink)" }}>{fmt(stockCostVal)}</strong>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+
+        {filtered.length === 0 && (
+          <div className="hf-card" style={{ padding: 24, textAlign: "center", color: "var(--ink-soft)" }}>
+            No products found matching "{query}".
+          </div>
+        )}
       </div>
 
       {activeProduct && (
@@ -2223,22 +2663,45 @@ function ProductDrawer({ product, db, setDb, canSeeCost, onDelete, onClose, noti
   const [editForm, setEditForm] = useState({
     name: product.name,
     category: product.category,
+    brand: product.brand || "",
     sellPrice: product.sellPrice,
     buyPrice: product.buyPrice,
+    conversionFactor: product.conversionFactor || 1,
+    purchaseUnit: product.purchaseUnit || product.baseUnit || "piece",
+    baseUnit: product.baseUnit || "piece",
+    contractorPrice: product.contractorPrice || 0,
+    wholesalePrice: product.wholesalePrice || 0,
     minStock: product.minStock,
+    stock: product.stock,
     location: product.location,
   });
 
+  const unitCost = getProductUnitCost(product);
+  const stockCostVal = getProductStockCost(product);
+  const stockRetailVal = getProductStockRetail(product);
+  const potentialProfit = stockRetailVal - stockCostVal;
+
   function handleSaveEdit() {
+    const updatedBuyPrice = Number(editForm.buyPrice) >= 0 ? Number(editForm.buyPrice) : product.buyPrice;
+    const updatedConversion = Number(editForm.conversionFactor) > 0 ? Number(editForm.conversionFactor) : 1;
+    const updatedUnitCost = updatedBuyPrice / updatedConversion;
+
     setDb(prev => ({
       ...prev,
       products: prev.products.map(p => p.id === product.id ? {
         ...p,
         name: editForm.name,
         category: editForm.category,
+        brand: editForm.brand,
         sellPrice: Number(editForm.sellPrice) || p.sellPrice,
-        buyPrice: Number(editForm.buyPrice) || p.buyPrice,
+        buyPrice: updatedBuyPrice,
+        conversionFactor: updatedConversion,
+        purchaseUnit: editForm.purchaseUnit || p.purchaseUnit,
+        baseUnit: editForm.baseUnit || p.baseUnit,
+        contractorPrice: Number(editForm.contractorPrice) || 0,
+        wholesalePrice: Number(editForm.wholesalePrice) || 0,
         minStock: Number(editForm.minStock) || p.minStock,
+        stock: Number(editForm.stock) !== undefined ? Number(editForm.stock) : p.stock,
         location: editForm.location,
       } : p),
       auditLog: [
@@ -2249,26 +2712,26 @@ function ProductDrawer({ product, db, setDb, canSeeCost, onDelete, onClose, noti
           role: "Owner",
           category: "Product Update",
           action: `Updated details for ${editForm.name}`,
-          detail: `Sell price: ${fmt(editForm.sellPrice)} · Min: ${editForm.minStock}`,
+          detail: `Sell price: ${fmt(editForm.sellPrice)} · Unit Cost: ${fmt(updatedUnitCost)} · Stock: ${editForm.stock} ${editForm.baseUnit}`,
           target: editForm.name,
         },
         ...prev.auditLog
       ]
     }));
 
-    notify("success", "Product Updated", `Updated details for ${editForm.name}.`);
+    notify("success", "Product Updated", `Updated specifications and pricing for ${editForm.name}.`);
     setEditing(false);
   }
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(20,24,30,0.5)", display: "flex", justifyContent: "flex-end", zIndex: 50 }} onClick={onClose}>
-      <div className="hf-card" style={{ width: 460, maxWidth: "92vw", height: "100%", borderRadius: 0, overflowY: "auto", padding: 24 }} onClick={e => e.stopPropagation()}>
+    <div style={{ position: "fixed", inset: 0, background: "rgba(20,24,30,0.6)", backdropFilter: "blur(2px)", display: "flex", justifyContent: "flex-end", zIndex: 1200 }} onClick={onClose}>
+      <div className="hf-card hf-modal-card" style={{ width: 480, maxWidth: "94vw", height: "100%", borderRadius: 0, overflowY: "auto", padding: "24px 20px" }} onClick={e => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
           <div>
-            <div className="disp" style={{ fontSize: 22, fontWeight: 700 }}>{product.name}</div>
-            <div style={{ fontSize: 12, color: "var(--ink-soft)" }}>{product.sku} · {product.category} {product.brand ? `· ${product.brand}` : ""}</div>
+            <div className="disp" style={{ fontSize: 24, fontWeight: 700 }}>{product.name}</div>
+            <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 2 }}>{product.sku} · {product.category} {product.brand ? `· ${product.brand}` : ""}</div>
           </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer" }}><X size={18} /></button>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><X size={20} /></button>
         </div>
 
         {product.description && (
@@ -2276,6 +2739,35 @@ function ProductDrawer({ product, db, setDb, canSeeCost, onDelete, onClose, noti
             {product.description}
           </div>
         )}
+
+        {/* Real-time Item Valuation Box */}
+        <div style={{ background: "var(--surface-hover)", border: "1px solid var(--line)", padding: 14, borderRadius: 10, marginBottom: 16 }}>
+          <div className="disp" style={{ fontSize: 15, fontWeight: 700, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+            <Package size={15} color="var(--rust)" /> Real-Time Item Valuation
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <div>
+              <div className="hf-kpi-label">Stock Quantity</div>
+              <div className="mono" style={{ fontSize: 16, fontWeight: 700, marginTop: 2 }}>{product.stock} {product.baseUnit}</div>
+            </div>
+            {canSeeCost && (
+              <div>
+                <div className="hf-kpi-label">Unit Cost Basis</div>
+                <div className="mono" style={{ fontSize: 16, fontWeight: 700, marginTop: 2 }}>{fmt(unitCost)}/{product.baseUnit}</div>
+              </div>
+            )}
+            <div>
+              <div className="hf-kpi-label">Retail Sales Val</div>
+              <div className="mono text-profit" style={{ fontSize: 16, fontWeight: 700, marginTop: 2 }}>{fmt(stockRetailVal)}</div>
+            </div>
+            {canSeeCost && (
+              <div>
+                <div className="hf-kpi-label">Total Cost Val</div>
+                <div className="mono" style={{ fontSize: 16, fontWeight: 700, marginTop: 2 }}>{fmt(stockCostVal)}</div>
+              </div>
+            )}
+          </div>
+        </div>
 
         {editing ? (
           <div style={{ background: "var(--surface-hover)", padding: 14, borderRadius: 10, marginBottom: 16 }}>
@@ -2285,27 +2777,55 @@ function ProductDrawer({ product, db, setDb, canSeeCost, onDelete, onClose, noti
                 <div className="hf-kpi-label" style={{ marginBottom: 3 }}>Product Name</div>
                 <input className="hf-input" value={editForm.name} onChange={e => setEditForm({ ...editForm, name: e.target.value })} />
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <div className="hf-field-grid">
+                <div>
+                  <div className="hf-kpi-label" style={{ marginBottom: 3 }}>Category</div>
+                  <input className="hf-input" value={editForm.category} onChange={e => setEditForm({ ...editForm, category: e.target.value })} />
+                </div>
+                <div>
+                  <div className="hf-kpi-label" style={{ marginBottom: 3 }}>Brand</div>
+                  <input className="hf-input" value={editForm.brand} onChange={e => setEditForm({ ...editForm, brand: e.target.value })} />
+                </div>
+              </div>
+              <div className="hf-field-grid">
                 <div>
                   <div className="hf-kpi-label" style={{ marginBottom: 3 }}>Selling Price (KSh)</div>
                   <input className="hf-input" type="number" value={editForm.sellPrice} onChange={e => setEditForm({ ...editForm, sellPrice: e.target.value })} />
                 </div>
                 {canSeeCost && (
                   <div>
-                    <div className="hf-kpi-label" style={{ marginBottom: 3 }}>Buying Price (KSh)</div>
+                    <div className="hf-kpi-label" style={{ marginBottom: 3 }}>Package Buying Cost (KSh)</div>
                     <input className="hf-input" type="number" value={editForm.buyPrice} onChange={e => setEditForm({ ...editForm, buyPrice: e.target.value })} />
                   </div>
                 )}
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              {canSeeCost && (
+                <div className="hf-field-grid">
+                  <div>
+                    <div className="hf-kpi-label" style={{ marginBottom: 3 }}>Pieces in Package (Conversion)</div>
+                    <input className="hf-input" type="number" min="1" value={editForm.conversionFactor} onChange={e => setEditForm({ ...editForm, conversionFactor: e.target.value })} />
+                  </div>
+                  <div>
+                    <div className="hf-kpi-label" style={{ marginBottom: 3 }}>Calculated Single Unit Cost</div>
+                    <div className="mono text-profit" style={{ padding: "10px 12px", background: "var(--surface)", border: "1.5px solid var(--line)", borderRadius: 9, fontWeight: 700 }}>
+                      {fmt((Number(editForm.buyPrice) || 0) / (Number(editForm.conversionFactor) > 0 ? Number(editForm.conversionFactor) : 1))}
+                    </div>
+                  </div>
+                </div>
+              )}
+              <div className="hf-field-grid">
+                <div>
+                  <div className="hf-kpi-label" style={{ marginBottom: 3 }}>Current Stock on Hand</div>
+                  <input className="hf-input" type="number" value={editForm.stock} onChange={e => setEditForm({ ...editForm, stock: e.target.value })} />
+                </div>
                 <div>
                   <div className="hf-kpi-label" style={{ marginBottom: 3 }}>Low Stock Alert Level</div>
                   <input className="hf-input" type="number" value={editForm.minStock} onChange={e => setEditForm({ ...editForm, minStock: e.target.value })} />
                 </div>
-                <div>
-                  <div className="hf-kpi-label" style={{ marginBottom: 3 }}>Location</div>
-                  <input className="hf-input" value={editForm.location} onChange={e => setEditForm({ ...editForm, location: e.target.value })} />
-                </div>
+              </div>
+              <div>
+                <div className="hf-kpi-label" style={{ marginBottom: 3 }}>Location</div>
+                <input className="hf-input" value={editForm.location} onChange={e => setEditForm({ ...editForm, location: e.target.value })} />
               </div>
             </div>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
@@ -2317,7 +2837,8 @@ function ProductDrawer({ product, db, setDb, canSeeCost, onDelete, onClose, noti
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
             <Stat label="Current Stock" value={`${product.stock} ${product.baseUnit}`} />
             <Stat label="Low Stock Warning" value={`${product.minStock} ${product.baseUnit}`} />
-            {canSeeCost && <Stat label="Buying Price (Cost)" value={`${fmt(product.buyPrice)} / ${product.purchaseUnit}`} />}
+            {canSeeCost && <Stat label="Buying Price (Package)" value={`${fmt(product.buyPrice)} / ${product.purchaseUnit}`} />}
+            {canSeeCost && <Stat label="Unit Cost Basis" value={`${fmt(unitCost)} / ${product.baseUnit}`} />}
             <Stat label="Selling Price" value={fmt(product.sellPrice)} />
             {product.contractorPrice > 0 && <Stat label="Contractor Price" value={fmt(product.contractorPrice)} />}
             {product.wholesalePrice > 0 && <Stat label="Wholesale Price" value={fmt(product.wholesalePrice)} />}
@@ -2412,15 +2933,17 @@ function NewProductModal({ db, onCancel, onSave, notify }) {
     onSave(form);
   }
 
+  const calculatedUnitCost = (Number(form.buyPrice) || 0) / (Number(form.conversionFactor) > 0 ? Number(form.conversionFactor) : 1);
+
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(20,24,30,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }} onClick={onCancel}>
-      <div className="hf-card" style={{ width: 540, maxWidth: "94vw", maxHeight: "90vh", overflowY: "auto", padding: 24 }} onClick={e => e.stopPropagation()}>
+    <div style={{ position: "fixed", inset: 0, background: "rgba(20,24,30,0.6)", backdropFilter: "blur(2px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1200 }} onClick={onCancel}>
+      <div className="hf-card hf-modal-card" style={{ width: 560, maxWidth: "94vw", maxHeight: "90vh", overflowY: "auto", padding: "24px 20px" }} onClick={e => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
           <div>
-            <div className="disp" style={{ fontSize: 22, fontWeight: 700 }}>Add New Product</div>
-            <div style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>Fill in the simple product details below to add it to your shop.</div>
+            <div className="disp" style={{ fontSize: 24, fontWeight: 700 }}>Add New Product</div>
+            <div style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>Fill in the specifications below to add stock to your hardware catalog.</div>
           </div>
-          <button onClick={onCancel} style={{ background: "none", border: "none", cursor: "pointer" }}><X size={18} /></button>
+          <button onClick={onCancel} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><X size={20} /></button>
         </div>
 
         <FieldGrid>
@@ -2471,11 +2994,17 @@ function NewProductModal({ db, onCancel, onSave, notify }) {
             <input className="hf-input" placeholder="e.g. Main Store, Yard, Shelf B" value={form.location} onChange={e => set("location", e.target.value)} />
           </Field>
 
-          <Field label="Buying Price (Cost per package)" help="How much you pay the supplier">
+          <Field label="Package Buying Cost (KSh)" help="Total cost you pay supplier per package">
             <input className="hf-input" type="number" placeholder="e.g. 650" value={form.buyPrice} onChange={e => set("buyPrice", e.target.value)} />
           </Field>
 
-          <Field label="Selling Price (Normal Retail) *" help="Price per customer unit">
+          <Field label="Calculated Single Unit Cost" help="Cost basis per single item sold">
+            <div className="mono text-profit" style={{ padding: "10px 12px", background: "var(--surface-hover)", border: "1.5px solid var(--line)", borderRadius: 9, fontWeight: 700 }}>
+              {fmt(calculatedUnitCost)} / {form.baseUnit || "piece"}
+            </div>
+          </Field>
+
+          <Field label="Selling Price (Normal Retail) *" help="Price charged to normal retail customer">
             <input className="hf-input" type="number" placeholder="e.g. 780" value={form.sellPrice} onChange={e => set("sellPrice", e.target.value)} />
           </Field>
 
@@ -2487,11 +3016,11 @@ function NewProductModal({ db, onCancel, onSave, notify }) {
             <input className="hf-input" type="number" placeholder="e.g. 720" value={form.wholesalePrice} onChange={e => set("wholesalePrice", e.target.value)} />
           </Field>
 
-          <Field label="Starting Stock in Shop" help="How many you currently have on hand">
+          <Field label="Starting Stock in Shop" help="How many single units you currently have on hand">
             <input className="hf-input" type="number" min="0" placeholder="e.g. 50" value={form.stock} onChange={e => set("stock", e.target.value)} />
           </Field>
 
-          <Field label="Low Stock Warning Level" help="Warn when stock drops below this number">
+          <Field label="Low Stock Warning Level" help="Alert when stock drops below this number">
             <input className="hf-input" type="number" min="0" placeholder="e.g. 10" value={form.minStock} onChange={e => set("minStock", e.target.value)} />
           </Field>
         </FieldGrid>
@@ -2507,7 +3036,7 @@ function NewProductModal({ db, onCancel, onSave, notify }) {
   );
 }
 
-function FieldGrid({ children }) { return <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>{children}</div>; }
+function FieldGrid({ children }) { return <div className="hf-field-grid">{children}</div>; }
 function Field({ label, help, children }) {
   return (
     <div>
@@ -3282,7 +3811,7 @@ function Cashbook({ db, setDb, notify, currentUser }) {
         <button className="hf-btn hf-btn-primary" onClick={() => setShowExpense(true)}><Plus size={15} /> Record Expense</button>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12, marginBottom: 20 }}>
+      <div className="hf-cashbook-summary">
         <div className="hf-ticket" style={{ padding: 16, display: "flex", flexDirection: "column" }}>
           <div className="hf-kpi-label" style={{ minHeight: 24 }}>Today's Inflow (Money In)</div>
           <div className="mono text-profit" style={{ fontSize: 22, fontWeight: 700, marginTop: "auto" }}>{fmt(totalIn)}</div>
@@ -3299,7 +3828,7 @@ function Cashbook({ db, setDb, notify, currentUser }) {
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <div className="hf-two-col">
         <div>
           <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
             <TrendingUp size={15} color="var(--green)" /> Money In (Cash & M-Pesa Sales + Debt Payments)
@@ -3372,8 +3901,8 @@ function NewExpenseModal({ onCancel, onSave, notify }) {
   }
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(20,24,30,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }} onClick={onCancel}>
-      <div className="hf-card" style={{ width: 400, maxWidth: "92vw", padding: 22 }} onClick={e => e.stopPropagation()}>
+    <div style={{ position: "fixed", inset: 0, background: "rgba(20,24,30,0.6)", backdropFilter: "blur(2px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1200 }} onClick={onCancel}>
+      <div className="hf-card hf-modal-card" style={{ width: 420, maxWidth: "94vw", padding: "22px 20px" }} onClick={e => e.stopPropagation()}>
         <div className="disp" style={{ fontSize: 20, fontWeight: 700, marginBottom: 14 }}>Record Expense</div>
         <Field label="Category">
           <select className="hf-input" value={form.category} onChange={e => set("category", e.target.value)}>
