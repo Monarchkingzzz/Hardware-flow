@@ -347,7 +347,35 @@ export async function pushDatabaseToSupabase(db) {
     })());
   }
 
-  // 9. System Settings (Sequences)
+  // 9. Purchases
+  if (db.purchases && db.purchases.length > 0) {
+    tasks.push((async () => {
+      try {
+        const { error } = await supabase.from("purchases").upsert(
+          db.purchases.map(p => ({
+            id: p.id,
+            po_number: p.poNumber || p.id,
+            supplier_id: p.supplierId || null,
+            supplier_name: p.supplierName || "",
+            date: p.date,
+            time: p.time || null,
+            items: p.items || [],
+            total: Number(p.total) || 0,
+            payment: p.payment || "credit",
+            received_by: p.receivedBy || "Staff",
+            notes: p.notes || "",
+          })),
+          { onConflict: "id" }
+        );
+        if (error) console.warn("Purchases sync notice:", error.message);
+        results.purchases = db.purchases.length;
+      } catch (err) {
+        console.warn("Purchases table sync notice:", err);
+      }
+    })());
+  }
+
+  // 10. System Settings (Sequences)
   tasks.push(
     supabase.from("system_settings").upsert(
       {
@@ -356,6 +384,7 @@ export async function pushDatabaseToSupabase(db) {
           invoiceSeq: db.invoiceSeq || 454,
           quoteSeq: db.quoteSeq || 1042,
           poSeq: db.poSeq || 2046,
+          adjSeq: db.adjSeq || 1002,
         },
       },
       { onConflict: "key" }
@@ -385,6 +414,7 @@ export async function pullDatabaseFromSupabase() {
     quotationsRes,
     auditRes,
     settingsRes,
+    purchasesRes,
   ] = await Promise.all([
     supabase.from("users").select("*"),
     supabase.from("suppliers").select("*"),
@@ -395,6 +425,7 @@ export async function pullDatabaseFromSupabase() {
     supabase.from("quotations").select("*"),
     supabase.from("audit_log").select("*").order("created_at", { ascending: false }),
     supabase.from("system_settings").select("*"),
+    supabase.from("purchases").select("*").order("date", { ascending: false }),
   ]);
 
   if (usersRes.error) throw usersRes.error;
@@ -492,6 +523,19 @@ export async function pullDatabaseFromSupabase() {
       detail: a.detail,
       target: a.target,
     })),
+    purchases: (purchasesRes?.data || []).map(p => ({
+      id: p.id,
+      poNumber: p.po_number,
+      supplierId: p.supplier_id,
+      supplierName: p.supplier_name,
+      date: p.date,
+      time: p.time,
+      items: p.items || [],
+      total: Number(p.total) || 0,
+      payment: p.payment,
+      receivedBy: p.received_by,
+      notes: p.notes,
+    })),
     invoiceSeq: Math.max(
       458,
       ...(salesRes.data || []).map(s => {
@@ -508,7 +552,15 @@ export async function pullDatabaseFromSupabase() {
       }),
       Number(seqObj.quoteSeq) || 1045
     ),
-    poSeq: seqObj.poSeq || 2046,
+    poSeq: Math.max(
+      2046,
+      ...(purchasesRes?.data || []).map(p => {
+        const m = String(p.po_number || "").match(/\d+$/);
+        return m ? parseInt(m[0], 10) + 1 : 0;
+      }),
+      Number(seqObj.poSeq) || 2046
+    ),
+    adjSeq: Number(seqObj.adjSeq) || 1002,
   };
 }
 

@@ -1,7 +1,7 @@
 -- ==============================================================================
 -- HARDWAREFLOW — ENTERPRISE SUPABASE DATABASE SCHEMA & SECURITY HARDENING
 -- Production-grade PostgreSQL Schema with Cryptographic Extensions, Check Constraints,
--- Performance B-Tree Indexes, and Realtime Publications.
+-- Performance B-Tree Indexes, Purchases & Movement History, and Realtime Publications.
 -- ==============================================================================
 
 -- Enable Core Extensions
@@ -30,7 +30,7 @@ create table if not exists public.suppliers (
   created_at timestamptz default now()
 );
 
--- 3. PRODUCTS (INVENTORY WITH INTEGRITY CONSTRAINTS)
+-- 3. PRODUCTS (INVENTORY WITH INTEGRITY CONSTRAINTS & MOVEMENT LEDGER)
 create table if not exists public.products (
   id text primary key,
   name text not null check (length(trim(name)) >= 1),
@@ -123,6 +123,22 @@ create table if not exists public.system_settings (
   updated_at timestamptz default now()
 );
 
+-- 10. SUPPLIER PURCHASES & DELIVERIES (STOCK INWARD ORDERS)
+create table if not exists public.purchases (
+  id text primary key,
+  po_number text not null,
+  supplier_id text references public.suppliers(id) on delete set null,
+  supplier_name text,
+  date text not null,
+  time text,
+  items jsonb default '[]'::jsonb,
+  total numeric default 0 check (total >= 0),
+  payment text default 'credit' check (payment in ('credit', 'cash', 'mpesa', 'bank')),
+  received_by text default 'Staff',
+  notes text,
+  created_at timestamptz default now()
+);
+
 -- ==============================================================================
 -- PERFORMANCE B-TREE INDEXES FOR HIGH-THROUGHPUT QUERIES
 -- ==============================================================================
@@ -135,6 +151,8 @@ create index if not exists idx_sales_customer on public.sales(customer_id);
 create index if not exists idx_expenses_date on public.expenses(date);
 create index if not exists idx_customers_phone on public.customers(phone);
 create index if not exists idx_audit_time on public.audit_log(created_at desc);
+create index if not exists idx_purchases_supplier on public.purchases(supplier_id);
+create index if not exists idx_purchases_date on public.purchases(date);
 
 -- ==============================================================================
 -- ROW LEVEL SECURITY (RLS) POLICIES
@@ -148,6 +166,7 @@ alter table public.expenses enable row level security;
 alter table public.quotations enable row level security;
 alter table public.audit_log enable row level security;
 alter table public.system_settings enable row level security;
+alter table public.purchases enable row level security;
 
 -- Create Public Access Policies (with check constraints enforced)
 do $$
@@ -161,6 +180,7 @@ begin
   drop policy if exists "Allow all operations for quotations" on public.quotations;
   drop policy if exists "Allow all operations for audit_log" on public.audit_log;
   drop policy if exists "Allow all operations for system_settings" on public.system_settings;
+  drop policy if exists "Allow all operations for purchases" on public.purchases;
 
   create policy "Allow all operations for users" on public.users for all using (true) with check (true);
   create policy "Allow all operations for suppliers" on public.suppliers for all using (true) with check (true);
@@ -171,6 +191,7 @@ begin
   create policy "Allow all operations for quotations" on public.quotations for all using (true) with check (true);
   create policy "Allow all operations for audit_log" on public.audit_log for all using (true) with check (true);
   create policy "Allow all operations for system_settings" on public.system_settings for all using (true) with check (true);
+  create policy "Allow all operations for purchases" on public.purchases for all using (true) with check (true);
 end $$;
 
 -- ==============================================================================
@@ -186,18 +207,42 @@ on conflict (id) do nothing;
 
 -- Suppliers
 insert into public.suppliers (id, name, phone, terms, payments) values
-  ('s1', 'ABC Supplies', '0722 100 200', 'Net 30', '[]'::jsonb),
+  ('s1', 'Bamburi & ABC Supplies', '0722 100 200', 'Net 30', '[{"date": "2026-08-05", "amount": 50000}]'::jsonb),
   ('s2', 'Doone Electricals', '0733 400 500', 'Net 14', '[]'::jsonb),
   ('s3', 'Steel & Nails Co', '0711 800 900', 'Cash on delivery', '[]'::jsonb)
 on conflict (id) do nothing;
 
--- Products
+-- Products (with rich movement history tracking and running balances)
 insert into public.products (id, name, category, brand, sku, description, base_unit, purchase_unit, conversion_factor, buy_price, sell_price, contractor_price, wholesale_price, min_stock, stock, supplier_id, location, history) values
-  ('p1', 'Cement 50kg', 'Cement & Building', 'Bamburi', 'CEM-001', 'Portland all-purpose building cement for masonry & concrete work.', 'bag', 'bag', 1, 650, 780, 750, 720, 20, 47, 's1', 'Main Store', '[{"date": "2026-08-14", "user": "Mary", "action": "Received", "qty": 100}, {"date": "2026-08-18", "user": "John", "action": "Sale", "qty": -12}]'::jsonb),
-  ('p2', 'Electrical Cable 2.5mm', 'Electrical', 'Doone', 'ELEC-010', 'Single core pure copper conduit wiring cable (100m roll).', 'metre', 'roll', 100, 8500, 110, 100, 95, 200, 385, 's2', 'Main Store', '[{"date": "2026-08-10", "user": "Mary", "action": "Received", "qty": 500}]'::jsonb),
-  ('p3', 'PVC Pipe 4-inch', 'Plumbing', 'Kenpipe', 'PVC-004', 'Heavy duty underground drainage and waste water PVC pipe (6m length).', 'piece', 'piece', 1, 180, 250, 230, 215, 15, 50, 's1', 'Yard', '[{"date": "2026-08-15", "user": "Mary", "action": "Received", "qty": 60}]'::jsonb),
-  ('p4', 'Nails 4-inch', 'Fasteners & Hardware', 'SteelCo', 'NAIL-004', 'Timber construction wire nails for roofing & formwork.', 'kg', 'bag (25kg)', 25, 3000, 150, 145, 135, 50, 18, 's3', 'Store', '[{"date": "2026-08-12", "user": "Mary", "action": "Received", "qty": 75}]'::jsonb),
-  ('p5', 'Gloss Paint 4L', 'Paint & Finishes', 'Crown', 'PNT-004', 'Brilliant white super gloss oil paint for wood & metal surfaces.', 'tin', 'carton (12)', 12, 12000, 1450, 1380, 1300, 24, 8, 's2', 'Shop', '[{"date": "2026-08-06", "user": "Mary", "action": "Received", "qty": 24}]'::jsonb)
+  ('p1', 'Cement 50kg', 'Cement & Building', 'Bamburi', 'CEM-001', 'Portland all-purpose building cement for masonry & concrete work.', 'bag', 'bag', 1, 650, 780, 750, 730, 20, 263, 's1', 'Main Store', '[
+    {"id": "h1", "date": "2026-08-01", "time": "08:00", "action": "Opening Stock", "ref": "INIT-001", "qty": 200, "balance": 200, "user": "Mary", "reason": "Initial inventory setup"},
+    {"id": "h2", "date": "2026-08-03", "time": "10:14", "action": "Sale", "ref": "INV-2026-00448", "qty": -15, "balance": 185, "user": "John", "reason": "Retail customer sale"},
+    {"id": "h3", "date": "2026-08-05", "time": "11:30", "action": "Receive Stock", "ref": "PO-1001", "qty": 100, "balance": 285, "user": "Mary", "reason": "Stock delivery from Bamburi"},
+    {"id": "h4", "date": "2026-08-06", "time": "14:20", "action": "Sale", "ref": "INV-2026-00450", "qty": -20, "balance": 265, "user": "John", "reason": "Credit sale to ABC Construction"},
+    {"id": "h5", "date": "2026-08-07", "time": "16:45", "action": "Adjustment", "ref": "ADJ-1001", "qty": -2, "balance": 263, "user": "Mary", "reason": "Damage — Torn bags during offloading"}
+  ]'::jsonb),
+  ('p2', 'Electrical Cable 2.5mm', 'Electrical', 'Doone', 'ELEC-010', 'Single core pure copper conduit wiring cable (100m roll).', 'metre', 'roll', 100, 8500, 110, 100, 95, 200, 385, 's2', 'Main Store', '[
+    {"id": "h6", "date": "2026-08-01", "time": "08:00", "action": "Opening Stock", "ref": "INIT-002", "qty": 400, "balance": 400, "user": "Mary", "reason": "Initial stock"},
+    {"id": "h7", "date": "2026-08-10", "time": "14:30", "action": "Sale", "ref": "INV-2026-00449", "qty": -15, "balance": 385, "user": "John", "reason": "Customer sale"}
+  ]'::jsonb),
+  ('p3', 'PVC Pipe 4-inch', 'Plumbing', 'Kenpipe', 'PVC-004', 'Heavy duty underground drainage and waste water PVC pipe (6m length).', 'piece', 'piece', 1, 180, 250, 230, 220, 15, 50, 's1', 'Yard', '[
+    {"id": "h8", "date": "2026-08-01", "time": "08:00", "action": "Opening Stock", "ref": "INIT-003", "qty": 60, "balance": 60, "user": "Mary", "reason": "Initial stock"},
+    {"id": "h9", "date": "2026-08-15", "time": "09:30", "action": "Sale", "ref": "INV-2026-00451", "qty": -10, "balance": 50, "user": "John", "reason": "Cash sale"}
+  ]'::jsonb),
+  ('p4', 'Nails 4-inch', 'Fasteners & Hardware', 'SteelCo', 'NAIL-004', 'Timber construction wire nails for roofing & formwork.', 'kg', 'bag (25kg)', 25, 3000, 150, 145, 135, 50, 67, 's3', 'Store', '[
+    {"id": "h10", "date": "2026-08-01", "time": "08:00", "action": "Opening Stock", "ref": "INIT-004", "qty": 75, "balance": 75, "user": "Mary", "reason": "Initial stock"},
+    {"id": "h11", "date": "2026-08-12", "time": "09:30", "action": "Sale", "ref": "INV-2026-00451", "qty": -8, "balance": 67, "user": "John", "reason": "M-Pesa sale"}
+  ]'::jsonb),
+  ('p5', 'Gloss Paint 4L', 'Paint & Finishes', 'Crown', 'PNT-004', 'Brilliant white super gloss oil paint for wood & metal surfaces.', 'tin', 'carton (12)', 12, 12000, 1450, 1380, 1300, 24, 16, 's2', 'Shop', '[
+    {"id": "h12", "date": "2026-08-01", "time": "08:00", "action": "Opening Stock", "ref": "INIT-005", "qty": 24, "balance": 24, "user": "Mary", "reason": "Initial stock"},
+    {"id": "h13", "date": "2026-08-16", "time": "11:15", "action": "Sale", "ref": "INV-2026-00452", "qty": -8, "balance": 16, "user": "John", "reason": "Credit sale"}
+  ]'::jsonb)
+on conflict (id) do nothing;
+
+-- Supplier Purchases
+insert into public.purchases (id, po_number, supplier_id, supplier_name, date, time, items, total, payment, received_by, notes) values
+  ('po1', 'PO-1001', 's1', 'Bamburi & ABC Supplies', '2026-08-02', '10:15', '[{"productId": "p1", "productName": "Cement 50kg", "qty": 130, "unit": "bag", "unitPrice": 650, "lineTotal": 84500}]'::jsonb, 85000, 'credit', 'Mary', 'Bamburi stock delivery'),
+  ('po2', 'PO-1002', 's1', 'Bamburi & ABC Supplies', '2026-08-10', '14:20', '[{"productId": "p1", "productName": "Cement 50kg", "qty": 80, "unit": "bag", "unitPrice": 650, "lineTotal": 52000}, {"productId": "p3", "productName": "PVC Pipe 4-inch", "qty": 44, "unit": "piece", "unitPrice": 180, "lineTotal": 7920}]'::jsonb, 60000, 'credit', 'Mary', 'Building materials delivery')
 on conflict (id) do nothing;
 
 -- Customers
@@ -209,7 +254,7 @@ on conflict (id) do nothing;
 
 -- System Settings & Sequences
 insert into public.system_settings (key, value) values
-  ('sequences', '{"invoiceSeq": 454, "quoteSeq": 1042, "poSeq": 2046}'::jsonb),
+  ('sequences', '{"invoiceSeq": 454, "quoteSeq": 1042, "poSeq": 2046, "adjSeq": 1002}'::jsonb),
   ('store_profile', '{"name": "HARDWAREFLOW SUPPLIES", "address": "Nairobi, Kenya", "phone": "+254 722 000 111", "taxPin": "P051234567Z", "currency": "KSh"}'::jsonb)
 on conflict (key) do nothing;
 
@@ -228,6 +273,7 @@ begin
   alter table public.quotations replica identity full;
   alter table public.audit_log replica identity full;
   alter table public.system_settings replica identity full;
+  alter table public.purchases replica identity full;
 
   -- Add tables to the supabase_realtime publication if not already present
   begin
@@ -240,10 +286,9 @@ begin
       public.expenses, 
       public.quotations, 
       public.audit_log, 
-      public.system_settings;
+      public.system_settings,
+      public.purchases;
   exception when duplicate_object then
     null;
   end;
 end $$;
-
-

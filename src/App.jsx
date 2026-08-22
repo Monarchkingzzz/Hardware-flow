@@ -6,7 +6,9 @@ import {
   ArrowRight, Receipt as ReceiptIcon, Download, Eye, Calendar,
   Award, CheckCircle2, Sun, Moon,
   LogOut, Key, Coins, Edit3, Menu, Wifi, WifiOff, RefreshCw,
-  Bell, BellRing, PhoneCall, Filter
+  Bell, BellRing, PhoneCall, Filter,
+  FileSpreadsheet, History, SlidersHorizontal, ArrowDownRight, ArrowUpRight,
+  FileDown, UploadCloud, CheckSquare, Info, ListFilter, Layers, Boxes, FileCheck
 } from "lucide-react";
 import {
   exportAuditLogPDF,
@@ -22,6 +24,7 @@ import { autoSyncDatabase, pullDatabaseFromSupabase, subscribeToSupabaseRealtime
 import { hashPassword, sanitizeUserForSession } from "./utils/security";
 import { useOnlineStatus, enqueueOfflineSale, syncOfflineQueue } from "./utils/offlineSync";
 import { usePWAInstall } from "./utils/usePWAInstall";
+import { downloadExcelTemplate, downloadCSVTemplate, parseProductFile } from "./utils/excelImport";
 
 /* ---------------------------------------------------------------
    HardwareFlow — Business Management System
@@ -108,6 +111,61 @@ function getInventoryMetrics(products = []) {
   };
 }
 
+/* ---------- Product Ledger & Transaction History Helpers ---------- */
+function getProductLedger(product) {
+  if (!product) return [];
+  const rawHistory = Array.isArray(product.history) ? product.history : [];
+  if (rawHistory.length === 0) return [];
+
+  let running = 0;
+  return rawHistory.map((h, idx) => {
+    const qty = Number(h.qty) || 0;
+    const computedBalance = h.balance !== undefined ? Number(h.balance) : (running + qty);
+    running = computedBalance;
+    return {
+      id: h.id || `h-${idx}`,
+      date: h.date || todayISO(0),
+      time: h.time || "",
+      action: h.action || (qty > 0 ? "Receive Stock" : "Sale"),
+      ref: h.ref || (h.action === "Sale" ? "POS" : h.action === "Opening Stock" ? "INIT" : "—"),
+      qty: qty,
+      balance: computedBalance,
+      user: h.user || "Staff",
+      reason: h.reason || h.notes || (h.action === "Opening Stock" ? "Opening stock balance" : ""),
+    };
+  });
+}
+
+function getProductLastSale(product, sales = []) {
+  if (!product) return null;
+  const relevant = (sales || []).filter(s => (s.items || []).some(it => it.productId === product.id));
+  if (relevant.length > 0) {
+    const sorted = [...relevant].sort((a, b) => (b.date + (b.time || "")).localeCompare(a.date + (a.time || "")));
+    return sorted[0];
+  }
+  const hist = (product.history || []).filter(h => h.action === "Sale" || Number(h.qty) < 0);
+  if (hist.length > 0) {
+    const sorted = [...hist].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    return { date: sorted[0].date, invoiceNo: sorted[0].ref || "Sale" };
+  }
+  return null;
+}
+
+function getProductLastPurchase(product, purchases = []) {
+  if (!product) return null;
+  const relevant = (purchases || []).filter(p => (p.items || []).some(it => it.productId === product.id));
+  if (relevant.length > 0) {
+    const sorted = [...relevant].sort((a, b) => (b.date + (b.time || "")).localeCompare(a.date + (a.time || "")));
+    return sorted[0];
+  }
+  const hist = (product.history || []).filter(h => h.action === "Received" || h.action === "Receive Stock" || h.action === "Opening Stock");
+  if (hist.length > 0) {
+    const sorted = [...hist].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    return { date: sorted[0].date, poNumber: sorted[0].ref || "Delivery" };
+  }
+  return null;
+}
+
 function buildSeed() {
   const users = [
     { id: "u1", username: "owner", password: "admin123", name: "Shop Owner", role: "owner", phone: "0722 000 111", pin: "8888" },
@@ -116,7 +174,7 @@ function buildSeed() {
   ];
 
   const suppliers = [
-    { id: "s1", name: "ABC Supplies", phone: "0722 100 200", terms: "Net 30", payments: [] },
+    { id: "s1", name: "Bamburi & ABC Supplies", phone: "0722 100 200", terms: "Net 30", payments: [{ date: todayISO(-17), amount: 50000 }] },
     { id: "s2", name: "Doone Electricals", phone: "0733 400 500", terms: "Net 14", payments: [] },
     { id: "s3", name: "Steel & Nails Co", phone: "0711 800 900", terms: "Cash on delivery", payments: [] },
   ];
@@ -126,12 +184,14 @@ function buildSeed() {
       id: "p1", name: "Cement 50kg", category: "Cement & Building", brand: "Bamburi", sku: "CEM-001",
       description: "Portland all-purpose building cement for masonry & concrete work.",
       baseUnit: "bag", purchaseUnit: "bag", conversionFactor: 1,
-      buyPrice: 650, sellPrice: 780, contractorPrice: 750, wholesalePrice: 720,
-      minStock: 20, stock: 47, supplierId: "s1", location: "Main Store",
+      buyPrice: 650, sellPrice: 780, contractorPrice: 750, wholesalePrice: 730,
+      minStock: 20, stock: 263, supplierId: "s1", location: "Main Store",
       history: [
-        { date: todayISO(-6), action: "Received", qty: 100, user: "Mary" },
-        { date: todayISO(-2), action: "Sale", qty: -12, user: "John" },
-        { date: todayISO(-1), action: "Sale", qty: -8, user: "John" },
+        { id: "h1", date: todayISO(-21), time: "08:00", action: "Opening Stock", ref: "INIT-001", qty: 200, balance: 200, user: "Mary", reason: "Opening stock on hand" },
+        { id: "h2", date: todayISO(-19), time: "10:14", action: "Sale", ref: "INV-1001", qty: -15, balance: 185, user: "John", reason: "Customer retail sale" },
+        { id: "h3", date: todayISO(-17), time: "11:30", action: "Receive Stock", ref: "PO-1001", qty: 100, balance: 285, user: "Mary", reason: "Delivery from Bamburi" },
+        { id: "h4", date: todayISO(-16), time: "14:20", action: "Sale", ref: "INV-1002", qty: -20, balance: 265, user: "John", reason: "Credit sale to ABC Construction" },
+        { id: "h5", date: todayISO(-15), time: "16:45", action: "Adjustment", ref: "ADJ-1001", qty: -2, balance: 263, user: "Mary", reason: "Damage — Torn bags during handling" },
       ],
     },
     {
@@ -141,33 +201,73 @@ function buildSeed() {
       buyPrice: 8500, sellPrice: 110, contractorPrice: 100, wholesalePrice: 95,
       minStock: 200, stock: 385, supplierId: "s2", location: "Main Store",
       history: [
-        { date: todayISO(-10), action: "Received", qty: 500, user: "Mary" },
-        { date: todayISO(-1), action: "Sale", qty: -15, user: "John" },
+        { id: "h6", date: todayISO(-21), time: "08:00", action: "Opening Stock", ref: "INIT-002", qty: 400, balance: 400, user: "Mary", reason: "Opening stock" },
+        { id: "h7", date: todayISO(-12), time: "14:30", action: "Sale", ref: "INV-2026-00449", qty: -15, balance: 385, user: "John", reason: "Customer sale" },
       ],
     },
     {
       id: "p3", name: "PVC Pipe 4-inch", category: "Plumbing", brand: "Kenpipe", sku: "PVC-004",
       description: "Heavy duty underground drainage and waste water PVC pipe (6m length).",
       baseUnit: "piece", purchaseUnit: "piece", conversionFactor: 1,
-      buyPrice: 180, sellPrice: 250, contractorPrice: 230, wholesalePrice: 215,
-      minStock: 15, stock: 50, supplierId: "s1", location: "Yard",
-      history: [{ date: todayISO(-5), action: "Received", qty: 60, user: "Mary" }],
+      buyPrice: 180, sellPrice: 250, contractorPrice: 230, wholesalePrice: 220,
+      minStock: 15, stock: 100, supplierId: "s1", location: "Yard",
+      history: [
+        { id: "h8", date: todayISO(-21), time: "08:00", action: "Opening Stock", ref: "INIT-003", qty: 100, balance: 100, user: "Mary", reason: "Initial setup" },
+      ],
     },
     {
       id: "p4", name: "Nails 4-inch", category: "Fasteners & Hardware", brand: "SteelCo", sku: "NAIL-004",
       description: "Timber construction wire nails for roofing & formwork.",
       baseUnit: "kg", purchaseUnit: "bag (25kg)", conversionFactor: 25,
       buyPrice: 3000, sellPrice: 150, contractorPrice: 145, wholesalePrice: 135,
-      minStock: 50, stock: 18, supplierId: "s3", location: "Store",
-      history: [{ date: todayISO(-8), action: "Received", qty: 75, user: "Mary" }],
+      minStock: 50, stock: 67, supplierId: "s3", location: "Store",
+      history: [
+        { id: "h9", date: todayISO(-21), time: "08:00", action: "Opening Stock", ref: "INIT-004", qty: 75, balance: 75, user: "Mary", reason: "Opening stock" },
+        { id: "h10", date: todayISO(-10), time: "09:30", action: "Sale", ref: "INV-2026-00451", qty: -8, balance: 67, user: "John", reason: "Cash sale" },
+      ],
     },
     {
       id: "p5", name: "Gloss Paint 4L", category: "Paint & Finishes", brand: "Crown", sku: "PNT-004",
       description: "Brilliant white super gloss oil paint for wood & metal surfaces.",
       baseUnit: "tin", purchaseUnit: "carton (12)", conversionFactor: 12,
       buyPrice: 12000, sellPrice: 1450, contractorPrice: 1380, wholesalePrice: 1300,
-      minStock: 24, stock: 8, supplierId: "s2", location: "Shop",
-      history: [{ date: todayISO(-14), action: "Received", qty: 24, user: "Mary" }],
+      minStock: 24, stock: 16, supplierId: "s2", location: "Shop",
+      history: [
+        { id: "h11", date: todayISO(-21), time: "08:00", action: "Opening Stock", ref: "INIT-005", qty: 24, balance: 24, user: "Mary", reason: "Opening stock" },
+        { id: "h12", date: todayISO(-6), time: "11:15", action: "Sale", ref: "INV-2026-00452", qty: -8, balance: 16, user: "John", reason: "Credit sale" },
+      ],
+    },
+  ];
+
+  const purchases = [
+    {
+      id: "po1",
+      poNumber: "PO-1001",
+      supplierId: "s1",
+      supplierName: "Bamburi & ABC Supplies",
+      date: todayISO(-20),
+      time: "10:15",
+      items: [{ productId: "p1", productName: "Cement 50kg", qty: 130, unit: "bag", unitPrice: 650, lineTotal: 84500 }],
+      total: 85000,
+      payment: "credit",
+      receivedBy: "Mary",
+      notes: "Bamburi building cement delivery",
+    },
+    {
+      id: "po2",
+      poNumber: "PO-1002",
+      supplierId: "s1",
+      supplierName: "Bamburi & ABC Supplies",
+      date: todayISO(-12),
+      time: "14:20",
+      items: [
+        { productId: "p1", productName: "Cement 50kg", qty: 80, unit: "bag", unitPrice: 650, lineTotal: 52000 },
+        { productId: "p3", productName: "PVC Pipe 4-inch", qty: 44, unit: "piece", unitPrice: 180, lineTotal: 7920 },
+      ],
+      total: 60000,
+      payment: "credit",
+      receivedBy: "Mary",
+      notes: "Building materials delivery",
     },
   ];
 
@@ -204,14 +304,14 @@ function buildSeed() {
   const auditLog = [
     { id: uid("LOG"), time: todayISO(0) + " 13:40", user: "John", role: "Cashier", category: "Sale", action: "Sold 13 × Cement 50kg", detail: fmt(10140) + " (INV-2026-00453)", target: "Cement 50kg" },
     { id: uid("LOG"), time: todayISO(0) + " 11:15", user: "John", role: "Cashier", category: "Credit Sale", action: "Recorded credit sale for XYZ Contractors", detail: fmt(30600) + " (INV-2026-00452)", target: "XYZ Contractors" },
-    { id: uid("LOG"), time: todayISO(0) + " 10:15", user: "Mary", role: "Storekeeper", category: "Stock Received", action: "Received 100 × Cement 50kg", detail: "from ABC Supplies", target: "Cement 50kg" },
+    { id: uid("LOG"), time: todayISO(0) + " 10:15", user: "Mary", role: "Storekeeper", category: "Stock Received", action: "Received 100 × Cement 50kg", detail: "from Bamburi & ABC Supplies", target: "Cement 50kg" },
     { id: uid("LOG"), time: todayISO(-1) + " 11:02", user: "Owner", role: "Owner", category: "Price Change", action: "Changed selling price — Cement 50kg", detail: "750 → 780 KSh", target: "Cement 50kg" },
-    { id: uid("LOG"), time: todayISO(-1) + " 11:43", user: "Mary", role: "Storekeeper", category: "Adjustment", action: "Stock adjustment — PVC Pipe", detail: "-3 pieces, reason: damaged during handling", target: "PVC Pipe 4-inch" },
+    { id: uid("LOG"), time: todayISO(-1) + " 11:43", user: "Mary", role: "Storekeeper", category: "Adjustment", action: "Stock adjustment — Cement 50kg", detail: "-2 bags, reason: Damage — Torn bags during handling", target: "Cement 50kg" },
   ];
 
   return {
-    users, products, suppliers, customers, sales, expenses, quotations, auditLog,
-    invoiceSeq: 454, quoteSeq: 1042, poSeq: 2046,
+    users, products, suppliers, customers, sales, expenses, quotations, auditLog, purchases,
+    invoiceSeq: 454, quoteSeq: 1042, poSeq: 2046, adjSeq: 1002,
   };
 }
 
@@ -224,6 +324,12 @@ function useDB() {
         const parsed = JSON.parse(saved);
         if (!parsed.users || parsed.users.length === 0) {
           parsed.users = buildSeed().users;
+        }
+        if (!parsed.purchases) {
+          parsed.purchases = buildSeed().purchases;
+        }
+        if (!parsed.adjSeq) {
+          parsed.adjSeq = 1002;
         }
         return parsed;
       }
@@ -1676,10 +1782,24 @@ function POS({ db, setDb, role, notify, currentUser }) {
       const products = prev.products.map(p => {
         const line = saleItems.find(i => i.productId === p.id);
         if (!line) return p;
+        const newStock = (Number(p.stock) || 0) - line.qty;
         return {
           ...p,
-          stock: p.stock - line.qty,
-          history: [...p.history, { date: sale.date, action: "Sale", qty: -line.qty, user: sale.employee }],
+          stock: newStock,
+          history: [
+            ...(p.history || []),
+            {
+              id: uid("H"),
+              date: sale.date,
+              time: timeStr,
+              action: "Sale",
+              ref: invoiceNo,
+              qty: -line.qty,
+              balance: newStock,
+              user: sale.employee,
+              reason: payment === "credit" ? "Credit sale" : "Customer sale",
+            }
+          ],
         };
       });
 
@@ -2453,24 +2573,572 @@ function ReceiptView({ sale, db, onClose, notify }) {
   );
 }
 
-/* ================= INVENTORY & PRODUCT REMOVAL/EDIT ================= */
-function Inventory({ db, setDb, role, notify, currentUser }) {
+/* ================= STOCK ADJUSTMENT MODULE ================= */
+function StockAdjustmentModal({ db, setDb, initialProduct, onCancel, notify, currentUser, role }) {
+  const [selectedProductId, setSelectedProductId] = useState(initialProduct?.id || db.products[0]?.id || "");
+  const [mode, setMode] = useState("decrease"); // "decrease" | "increase"
+  const [qty, setQty] = useState("");
+  const [reason, setReason] = useState("Damage / Broken");
+  const [notes, setNotes] = useState("");
+
+  const product = db.products.find(p => p.id === selectedProductId);
+  const currentStock = Number(product?.stock) || 0;
+  const adjustQty = Number(qty) || 0;
+  const newStock = mode === "increase" ? currentStock + adjustQty : currentStock - adjustQty;
+  const unitCost = getProductUnitCost(product);
+  const valueDifference = (mode === "increase" ? adjustQty : -adjustQty) * unitCost;
+
+  const REASONS = [
+    "Damage / Broken",
+    "Theft / Lost",
+    "Physical Count Correction",
+    "Customer Return",
+    "Supplier Return / Replacement",
+    "Scrapped / Expired",
+    "Other Correction",
+  ];
+
+  function handleSubmit() {
+    if (!product) {
+      notify("error", "No Product Selected", "Please choose a valid product.");
+      return;
+    }
+    if (adjustQty <= 0) {
+      notify("error", "Invalid Quantity", "Please enter a positive adjustment quantity.");
+      return;
+    }
+    if (mode === "decrease" && newStock < 0) {
+      if (!confirm(`Warning: Decreasing stock by ${adjustQty} will result in negative inventory (${newStock} ${product.baseUnit}). Do you want to proceed?`)) {
+        return;
+      }
+    }
+
+    const operator = currentUser?.name || (role === "owner" ? "Shop Owner" : "Mary");
+    const timeStr = new Date().toTimeString().slice(0, 5);
+    const today = todayISO(0);
+    const nextAdjSeq = (db.adjSeq || 1002) + 1;
+    const adjRef = `ADJ-${nextAdjSeq}`;
+    const fullReason = `${reason}${notes.trim() ? " — " + notes.trim() : ""}`;
+
+    setDb(prev => ({
+      ...prev,
+      products: prev.products.map(p => p.id === product.id ? {
+        ...p,
+        stock: newStock,
+        history: [
+          ...(p.history || []),
+          {
+            id: uid("ADJ"),
+            date: today,
+            time: timeStr,
+            action: "Adjustment",
+            ref: adjRef,
+            qty: mode === "increase" ? adjustQty : -adjustQty,
+            balance: newStock,
+            user: operator,
+            reason: fullReason,
+          }
+        ],
+      } : p),
+      adjSeq: nextAdjSeq,
+      auditLog: [
+        {
+          id: uid("LOG"),
+          time: `${today} ${timeStr}`,
+          user: operator,
+          role: role === "owner" ? "Owner" : "Storekeeper",
+          category: "Stock Adjustment",
+          action: `Adjusted stock for ${product.name}: ${mode === "increase" ? "+" : "-"}${adjustQty} ${product.baseUnit} (${adjRef})`,
+          detail: `Reason: ${fullReason} · Prior stock: ${currentStock} → New stock: ${newStock} · Value Impact: ${fmt(valueDifference)}`,
+          target: product.name,
+        },
+        ...prev.auditLog
+      ]
+    }));
+
+    notify("success", "Stock Adjusted", `${product.name} stock updated to ${newStock} ${product.baseUnit} (${adjRef}).`);
+    onCancel();
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(20,24,30,0.6)", backdropFilter: "blur(2px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1300 }} onClick={onCancel}>
+      <div className="hf-card hf-modal-card" style={{ width: 520, maxWidth: "94vw", maxHeight: "90vh", overflowY: "auto", padding: "24px 20px" }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <div>
+            <div className="disp" style={{ fontSize: 24, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>
+              <SlidersHorizontal size={22} color="var(--rust)" />
+              <span>Stock Adjustment</span>
+            </div>
+            <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2 }}>Record damaged, broken, lost, or physical count corrections.</div>
+          </div>
+          <button onClick={onCancel} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><X size={20} /></button>
+        </div>
+
+        {/* Product Selector */}
+        <div style={{ marginBottom: 14 }}>
+          <div className="hf-kpi-label" style={{ marginBottom: 4 }}>Select Product *</div>
+          <select className="hf-input" value={selectedProductId} onChange={e => setSelectedProductId(e.target.value)}>
+            {db.products.map(p => (
+              <option key={p.id} value={p.id}>
+                {p.name} ({p.sku}) — Stock: {p.stock} {p.baseUnit}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Adjustment Direction Toggle: Decrease (-) vs Increase (+) */}
+        <div style={{ marginBottom: 14 }}>
+          <div className="hf-kpi-label" style={{ marginBottom: 4 }}>Adjustment Action *</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              type="button"
+              className="hf-btn"
+              style={{
+                flex: 1,
+                justifyContent: "center",
+                background: mode === "decrease" ? "var(--red)" : "var(--surface)",
+                color: mode === "decrease" ? "#fff" : "var(--ink)",
+                border: mode === "decrease" ? "1.5px solid var(--red-dark, #A82020)" : "1.5px solid var(--line)",
+                fontWeight: mode === "decrease" ? 700 : 500,
+              }}
+              onClick={() => setMode("decrease")}
+            >
+              <Minus size={15} /> Decrease Stock (Damaged / Lost)
+            </button>
+            <button
+              type="button"
+              className="hf-btn"
+              style={{
+                flex: 1,
+                justifyContent: "center",
+                background: mode === "increase" ? "var(--green)" : "var(--surface)",
+                color: mode === "increase" ? "#fff" : "var(--ink)",
+                border: mode === "increase" ? "1.5px solid var(--green, #2E7D32)" : "1.5px solid var(--line)",
+                fontWeight: mode === "increase" ? 700 : 500,
+              }}
+              onClick={() => setMode("increase")}
+            >
+              <Plus size={15} /> Increase Stock (Found / Returned)
+            </button>
+          </div>
+        </div>
+
+        <FieldGrid>
+          <div>
+            <div className="hf-kpi-label" style={{ marginBottom: 4 }}>Quantity to {mode === "increase" ? "Add" : "Deduct"} ({product?.baseUnit || "units"}) *</div>
+            <input
+              className="hf-input mono"
+              type="number"
+              min="1"
+              placeholder="e.g. 2, 5, 10"
+              value={qty}
+              onChange={e => setQty(e.target.value)}
+            />
+          </div>
+
+          <div>
+            <div className="hf-kpi-label" style={{ marginBottom: 4 }}>Reason Required *</div>
+            <select className="hf-input" value={reason} onChange={e => setReason(e.target.value)}>
+              {REASONS.map(r => <option key={r} value={r}>{r}</option>)}
+            </select>
+          </div>
+        </FieldGrid>
+
+        <div style={{ marginTop: 12, marginBottom: 16 }}>
+          <div className="hf-kpi-label" style={{ marginBottom: 4 }}>Audit Remarks / Explanation</div>
+          <input
+            className="hf-input"
+            placeholder="e.g. Torn cement bags during forklift offloading, stocktake recount variance"
+            value={notes}
+            onChange={e => setNotes(e.target.value)}
+          />
+        </div>
+
+        {/* Live Calculation Preview Banner */}
+        <div style={{ background: "var(--surface-hover)", border: "1.5px solid var(--line)", borderRadius: 10, padding: "12px 14px", marginBottom: 16 }}>
+          <div style={{ fontSize: 11, color: "var(--ink-soft)", textTransform: "uppercase", fontWeight: 700, letterSpacing: "0.04em", marginBottom: 6 }}>
+            Adjustment Stock Preview
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13.5, flexWrap: "wrap", gap: 8 }}>
+            <div>
+              <span style={{ color: "var(--ink-soft)" }}>Current: </span>
+              <strong className="mono">{currentStock} {product?.baseUnit}</strong>
+              <span style={{ margin: "0 6px", color: "var(--ink-soft)" }}>→</span>
+              <span style={{ color: "var(--ink-soft)" }}>Change: </span>
+              <strong className="mono" style={{ color: mode === "increase" ? "var(--green)" : "var(--red)" }}>
+                {mode === "increase" ? "+" : "-"}{adjustQty || 0}
+              </strong>
+              <span style={{ margin: "0 6px", color: "var(--ink-soft)" }}>→</span>
+              <span style={{ color: "var(--ink-soft)" }}>New Stock: </span>
+              <strong className="mono" style={{ color: newStock < 0 ? "var(--red)" : "var(--ink)", fontWeight: 700 }}>
+                {newStock} {product?.baseUnit}
+              </strong>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 11, color: "var(--ink-soft)" }}>Valuation Impact</div>
+              <div className="mono" style={{ fontWeight: 700, color: valueDifference >= 0 ? "var(--green)" : "var(--red)" }}>
+                {valueDifference >= 0 ? "+" : ""}{fmt(valueDifference)}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button className="hf-btn hf-btn-ghost" onClick={onCancel}>Cancel</button>
+          <button
+            className="hf-btn hf-btn-primary"
+            onClick={handleSubmit}
+            disabled={!qty || Number(qty) <= 0}
+          >
+            <Check size={16} /> Confirm Stock Adjustment
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ================= EXCEL & CSV BULK IMPORT MODULE ================= */
+function ExcelImportModal({ db, setDb, onCancel, notify, currentUser, role }) {
+  const [file, setFile] = useState(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [parsing, setParsing] = useState(false);
+  const [parsedData, setParsedData] = useState(null);
+  const [parseError, setParseError] = useState("");
+  const [defaultSupplierId, setDefaultSupplierId] = useState("");
+  const [defaultCategory, setDefaultCategory] = useState("");
+  const [isImporting, setIsImporting] = useState(false);
+
+  const fileInputRef = useRef(null);
+
+  async function handleFileSelect(selectedFile) {
+    if (!selectedFile) return;
+    setFile(selectedFile);
+    setParseError("");
+    setParsing(true);
+    try {
+      const result = await parseProductFile(selectedFile);
+      setParsedData(result);
+    } catch (err) {
+      console.error("Excel import parse error:", err);
+      setParseError(err.message || "Failed to parse file. Please verify format.");
+      setParsedData(null);
+    } finally {
+      setParsing(false);
+    }
+  }
+
+  function handleDrop(e) {
+    e.preventDefault();
+    setIsDragging(false);
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      handleFileSelect(e.dataTransfer.files[0]);
+    }
+  }
+
+  function handleExecuteImport() {
+    if (!parsedData || parsedData.validRows.length === 0) {
+      notify("warning", "No Valid Rows", "There are no valid products to import.");
+      return;
+    }
+
+    setIsImporting(true);
+    const operator = currentUser?.name || (role === "owner" ? "Shop Owner" : "Mary");
+    const today = todayISO(0);
+    const timeStr = new Date().toTimeString().slice(0, 5);
+
+    const newProducts = [];
+
+    parsedData.validRows.forEach((r, idx) => {
+      const pId = uid("P");
+      const sku = r.sku || `SKU-${Math.floor(1000 + Math.random() * 9000)}`;
+      const prodCategory = r.category || defaultCategory || "General";
+      const supplierId = r.supplierId || defaultSupplierId || "";
+      const stock = Number(r.stock) || 0;
+
+      newProducts.push({
+        id: pId,
+        name: r.name,
+        category: prodCategory,
+        brand: r.brand || "Standard",
+        sku: sku,
+        description: r.description || `Imported product: ${r.name}`,
+        baseUnit: r.baseUnit || "piece",
+        purchaseUnit: r.purchaseUnit || r.baseUnit || "piece",
+        conversionFactor: Number(r.conversionFactor) > 0 ? Number(r.conversionFactor) : 1,
+        buyPrice: Number(r.buyPrice) || 0,
+        sellPrice: Number(r.sellPrice) || 0,
+        contractorPrice: Number(r.contractorPrice) || Number(r.sellPrice) || 0,
+        wholesalePrice: Number(r.wholesalePrice) || Number(r.sellPrice) || 0,
+        minStock: Number(r.minStock) || 10,
+        stock: stock,
+        supplierId: supplierId,
+        location: r.location || "Main Store",
+        history: [
+          {
+            id: uid("H"),
+            date: today,
+            time: timeStr,
+            action: "Opening Stock",
+            ref: "EXCEL-IMPORT",
+            qty: stock,
+            balance: stock,
+            user: operator,
+            reason: `Bulk onboard from ${parsedData.filename}`,
+          }
+        ],
+      });
+    });
+
+    setDb(prev => ({
+      ...prev,
+      products: [...prev.products, ...newProducts],
+      auditLog: [
+        {
+          id: uid("LOG"),
+          time: `${today} ${timeStr}`,
+          user: operator,
+          role: role === "owner" ? "Owner" : "Storekeeper",
+          category: "Bulk Import",
+          action: `Imported ${newProducts.length} product(s) from Excel/CSV`,
+          detail: `File: ${parsedData.filename} · Total stock value added: ${fmt(newProducts.reduce((a, p) => a + getProductStockValue(p), 0))}`,
+          target: `${newProducts.length} Products`,
+        },
+        ...prev.auditLog
+      ]
+    }));
+
+    notify("success", "Bulk Import Successful", `Successfully imported ${newProducts.length} products into your inventory!`);
+    setIsImporting(false);
+    onCancel();
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(20,24,30,0.6)", backdropFilter: "blur(2px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1300 }} onClick={onCancel}>
+      <div className="hf-card hf-modal-card" style={{ width: 780, maxWidth: "96vw", maxHeight: "92vh", overflowY: "auto", padding: "24px 20px", display: "flex", flexDirection: "column" }} onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
+          <div>
+            <div className="disp" style={{ fontSize: 24, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>
+              <FileSpreadsheet size={24} color="var(--green)" />
+              <span>Import Products from Excel / CSV</span>
+            </div>
+            <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2 }}>
+              Onboard hundreds of hardware products in seconds with automatic column mapping and opening stock tracking.
+            </div>
+          </div>
+          <button onClick={onCancel} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><X size={20} /></button>
+        </div>
+
+        {/* Template Downloads & Guidance Bar */}
+        <div style={{ background: "var(--surface-hover)", border: "1.5px dashed var(--line)", borderRadius: 10, padding: "12px 16px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 13 }}>Download Standard Hardware Template</div>
+            <div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Columns: Product Name, Category, Unit, Cost Price, Retail Price, Contractor, Wholesale, Opening Stock, Reorder Level</div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button type="button" className="hf-btn hf-btn-ghost" style={{ fontSize: 12 }} onClick={downloadExcelTemplate}>
+              <Download size={14} color="var(--green)" /> Excel Template (.xlsx)
+            </button>
+            <button type="button" className="hf-btn hf-btn-ghost" style={{ fontSize: 12 }} onClick={downloadCSVTemplate}>
+              <Download size={14} /> CSV Template (.csv)
+            </button>
+          </div>
+        </div>
+
+        {/* File Dropzone */}
+        {!parsedData && (
+          <div
+            onDragOver={e => { e.preventDefault(); setIsDragging(true); }}
+            onDragLeave={() => setIsDragging(false)}
+            onDrop={handleDrop}
+            onClick={() => fileInputRef.current?.click()}
+            style={{
+              border: isDragging ? "2px solid var(--rust)" : "2px dashed var(--line)",
+              background: isDragging ? "var(--surface-hover)" : "var(--surface)",
+              borderRadius: 12,
+              padding: "36px 20px",
+              textAlign: "center",
+              cursor: "pointer",
+              marginBottom: 16,
+              transition: "all .15s ease",
+            }}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".xlsx, .xls, .csv"
+              style={{ display: "none" }}
+              onChange={e => e.target.files?.[0] && handleFileSelect(e.target.files[0])}
+            />
+            <UploadCloud size={38} color="var(--rust)" style={{ margin: "0 auto 10px" }} />
+            <div style={{ fontWeight: 700, fontSize: 15 }}>
+              {parsing ? "Parsing spreadsheet..." : "Click or drag & drop Excel / CSV file here"}
+            </div>
+            <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 4 }}>
+              Supports Microsoft Excel (.xlsx, .xls) and Comma-Separated Values (.csv)
+            </div>
+          </div>
+        )}
+
+        {parseError && (
+          <div className="hf-card" style={{ padding: "12px 14px", borderLeft: "3px solid var(--red)", marginBottom: 14, color: "var(--red)", fontSize: 13 }}>
+            <AlertTriangle size={15} style={{ display: "inline", verticalAlign: "middle", marginRight: 6 }} />
+            {parseError}
+          </div>
+        )}
+
+        {/* Preview of Parsed Rows */}
+        {parsedData && (
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <FileCheck size={18} color="var(--green)" />
+                <span style={{ fontWeight: 700, fontSize: 14 }}>{parsedData.filename}</span>
+                <Pill tone="green">{parsedData.validRows.length} valid product(s)</Pill>
+                {parsedData.invalidRows.length > 0 && <Pill tone="red">{parsedData.invalidRows.length} invalid</Pill>}
+              </div>
+              <button className="hf-btn hf-btn-ghost" style={{ fontSize: 12 }} onClick={() => { setParsedData(null); setFile(null); }}>
+                Choose Different File
+              </button>
+            </div>
+
+            {/* Global Assignment Options */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, background: "var(--surface-hover)", padding: 12, borderRadius: 8, marginBottom: 12 }}>
+              <div>
+                <div className="hf-kpi-label" style={{ marginBottom: 3 }}>Default Supplier (if empty in file)</div>
+                <select className="hf-input" value={defaultSupplierId} onChange={e => setDefaultSupplierId(e.target.value)}>
+                  <option value="">None / Unassigned</option>
+                  {db.suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <div className="hf-kpi-label" style={{ marginBottom: 3 }}>Default Category (if empty in file)</div>
+                <input className="hf-input" placeholder="e.g. General, Hardware" value={defaultCategory} onChange={e => setDefaultCategory(e.target.value)} />
+              </div>
+            </div>
+
+            {/* Preview Table */}
+            <div style={{ maxHeight: 260, overflowY: "auto", border: "1px solid var(--line)", borderRadius: 8, marginBottom: 14 }}>
+              <table className="hf-table" style={{ fontSize: 12 }}>
+                <thead>
+                  <tr>
+                    <th style={{ width: 35 }}>#</th>
+                    <th>Product Name</th>
+                    <th>Category</th>
+                    <th>Unit</th>
+                    <th>Cost Price</th>
+                    <th>Retail Price</th>
+                    <th>Contractor</th>
+                    <th>Opening Stock</th>
+                    <th>Reorder Level</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {parsedData.validRows.map((r, i) => (
+                    <tr key={i}>
+                      <td className="mono" style={{ color: "var(--ink-soft)" }}>{r._rowNumber}</td>
+                      <td>
+                        <strong>{r.name}</strong>
+                        {r.brand && <span style={{ color: "var(--ink-soft)", fontSize: 11 }}> ({r.brand})</span>}
+                      </td>
+                      <td>{r.category}</td>
+                      <td className="mono">{r.baseUnit}</td>
+                      <td className="mono">{fmt(r.buyPrice)}</td>
+                      <td className="mono text-profit" style={{ fontWeight: 600 }}>{fmt(r.sellPrice)}</td>
+                      <td className="mono">{fmt(r.contractorPrice)}</td>
+                      <td className="mono" style={{ fontWeight: 700 }}>{r.stock}</td>
+                      <td className="mono" style={{ color: "var(--ink-soft)" }}>{r.minStock}</td>
+                      <td>
+                        <span style={{ color: "var(--green)", fontWeight: 600 }}>✓ Ready</span>
+                      </td>
+                    </tr>
+                  ))}
+                  {parsedData.invalidRows.map((r, i) => (
+                    <tr key={"inv-" + i} style={{ background: "rgba(220, 50, 50, 0.05)" }}>
+                      <td className="mono" style={{ color: "var(--red)" }}>{r._rowNumber}</td>
+                      <td style={{ color: "var(--red)" }}><strong>{r.name || "Missing Name"}</strong></td>
+                      <td>{r.category}</td>
+                      <td>{r.baseUnit}</td>
+                      <td>{fmt(r.buyPrice)}</td>
+                      <td>{fmt(r.sellPrice)}</td>
+                      <td>—</td>
+                      <td>{r.stock}</td>
+                      <td>{r.minStock}</td>
+                      <td><Pill tone="red">INVALID</Pill></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {parsedData.errors.length > 0 && (
+              <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginBottom: 12 }}>
+                ⚠️ {parsedData.errors.slice(0, 3).join("; ")}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: "auto" }}>
+          <button className="hf-btn hf-btn-ghost" onClick={onCancel}>Cancel</button>
+          {parsedData && (
+            <button
+              className="hf-btn hf-btn-primary"
+              onClick={handleExecuteImport}
+              disabled={isImporting || parsedData.validRows.length === 0}
+            >
+              <Check size={16} /> Import {parsedData.validRows.length} Products
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ================= INVENTORY & PRODUCT MANAGEMENT ================= */
+function Inventory({ db, setDb, role, notify, currentUser, onReceiveShortcut }) {
   const [query, setQuery] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState("all");
   const [selected, setSelected] = useState(null);
   const [showNew, setShowNew] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [showAdjustment, setShowAdjustment] = useState(false);
+  const [adjustProduct, setAdjustProduct] = useState(null);
+
   const canSeeCost = role === "owner" || role === "storekeeper";
 
   const metrics = useMemo(() => getInventoryMetrics(db.products), [db.products]);
+
+  const categories = useMemo(() => {
+    const set = new Set();
+    (db.products || []).forEach(p => {
+      if (p.category) set.add(p.category.trim());
+    });
+    return ["all", ...Array.from(set)];
+  }, [db.products]);
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return db.products;
-    return db.products.filter(p => (p.name || "").toLowerCase().includes(q) || (p.sku || "").toLowerCase().includes(q) || (p.category || "").toLowerCase().includes(q));
-  }, [db.products, query]);
+    return (db.products || []).filter(p => {
+      if (selectedCategory !== "all" && p.category !== selectedCategory) return false;
+      if (!q) return true;
+      return (
+        (p.name || "").toLowerCase().includes(q) ||
+        (p.sku || "").toLowerCase().includes(q) ||
+        (p.category || "").toLowerCase().includes(q) ||
+        (p.brand || "").toLowerCase().includes(q)
+      );
+    });
+  }, [db.products, query, selectedCategory]);
 
   const activeProduct = selected ? db.products.find(p => p.id === selected) : null;
 
   function addProduct(form) {
-    const operator = currentUser?.name || (role === "owner" ? "Owner" : "Mary");
+    const operator = currentUser?.name || (role === "owner" ? "Shop Owner" : "Mary");
+    const stock = Number(form.stock) || 0;
     const p = {
       id: uid("P"),
       name: form.name,
@@ -2486,11 +3154,21 @@ function Inventory({ db, setDb, role, notify, currentUser }) {
       contractorPrice: Number(form.contractorPrice) || 0,
       wholesalePrice: Number(form.wholesalePrice) || 0,
       minStock: Number(form.minStock) || 0,
-      stock: Number(form.stock) || 0,
+      stock: stock,
       supplierId: form.supplierId || "",
       location: form.location || "Main Store",
       history: [
-        { date: todayISO(0), action: "Opening Stock", qty: Number(form.stock) || 0, user: operator }
+        {
+          id: uid("H"),
+          date: todayISO(0),
+          time: new Date().toTimeString().slice(0, 5),
+          action: "Opening Stock",
+          ref: "INIT",
+          qty: stock,
+          balance: stock,
+          user: operator,
+          reason: "Product catalog registration",
+        }
       ],
     };
 
@@ -2505,7 +3183,7 @@ function Inventory({ db, setDb, role, notify, currentUser }) {
           role: role === "owner" ? "Owner" : "Storekeeper",
           category: "Product",
           action: `Added new product: ${p.name}`,
-          detail: `SKU: ${p.sku} · Stock: ${p.stock} ${p.baseUnit} · Cost: ${fmt(getProductUnitCost(p))}`,
+          detail: `SKU: ${p.sku} · Initial stock: ${p.stock} ${p.baseUnit} · Cost: ${fmt(getProductUnitCost(p))}`,
           target: p.name,
         },
         ...prev.auditLog
@@ -2520,11 +3198,11 @@ function Inventory({ db, setDb, role, notify, currentUser }) {
     const prod = db.products.find(p => p.id === productId);
     if (!prod) return;
 
-    if (!confirm(`Are you sure you want to remove "${prod.name}" (${prod.sku}) from inventory? This action cannot be undone.`)) {
+    if (!confirm(`Are you sure you want to permanently remove "${prod.name}" (${prod.sku}) from inventory? This action cannot be undone.`)) {
       return;
     }
 
-    const operator = currentUser?.name || (role === "owner" ? "Owner" : "Staff");
+    const operator = currentUser?.name || (role === "owner" ? "Shop Owner" : "Staff");
 
     setDb(prev => ({
       ...prev,
@@ -2560,10 +3238,16 @@ function Inventory({ db, setDb, role, notify, currentUser }) {
         <div>
           <div className="disp" style={{ fontSize: 28, fontWeight: 700 }}>Real-Time Stock & Inventory</div>
           <div style={{ color: "var(--ink-soft)", fontSize: 13, marginTop: 2 }}>
-            Live stock counts, cost valuations, and retail margin tracking.
+            Live stock counts, Excel batch importing, movement ledger, and price tier tracking.
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button className="hf-btn hf-btn-ghost" onClick={() => setShowImport(true)}>
+            <FileSpreadsheet size={15} color="var(--green)" /> Import Excel / CSV
+          </button>
+          <button className="hf-btn hf-btn-ghost" onClick={() => { setAdjustProduct(null); setShowAdjustment(true); }}>
+            <SlidersHorizontal size={15} /> Adjust Stock
+          </button>
           <button className="hf-btn hf-btn-ghost" onClick={downloadPDF}>
             <Download size={15} /> Download PDF
           </button>
@@ -2572,7 +3256,6 @@ function Inventory({ db, setDb, role, notify, currentUser }) {
           </button>
         </div>
       </div>
-
 
       {/* Executive Real-Time Stock Valuation Banner */}
       <div className="hf-stock-banner">
@@ -2607,16 +3290,42 @@ function Inventory({ db, setDb, role, notify, currentUser }) {
         </div>
       </div>
 
-      {/* Search Filter */}
-      <div style={{ position: "relative", marginBottom: 14, maxWidth: 360 }}>
-        <Search size={15} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--ink-soft)", pointerEvents: "none" }} />
-        <input
-          className="hf-input hf-input-with-left-icon"
-          style={{ paddingLeft: 38 }}
-          placeholder="Search products by name, SKU, or category…"
-          value={query}
-          onChange={e => setQuery(e.target.value)}
-        />
+      {/* Filters Bar */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
+        <div style={{ position: "relative", minWidth: 280, flex: "1 1 280px", maxWidth: 400 }}>
+          <Search size={15} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--ink-soft)", pointerEvents: "none" }} />
+          <input
+            className="hf-input hf-input-with-left-icon"
+            style={{ paddingLeft: 38 }}
+            placeholder="Search products by name, SKU, category, brand…"
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+          />
+        </div>
+
+        {/* Category Filter Pills */}
+        <div style={{ display: "flex", gap: 6, overflowX: "auto", maxWidth: "100%", paddingBottom: 4 }}>
+          {categories.slice(0, 6).map(c => (
+            <button
+              key={c}
+              type="button"
+              className="hf-btn"
+              style={{
+                fontSize: 12,
+                padding: "6px 12px",
+                background: selectedCategory === c ? "var(--rust)" : "var(--surface)",
+                color: selectedCategory === c ? "#fff" : "var(--ink)",
+                border: "1px solid var(--line)",
+                borderRadius: 8,
+                textTransform: c === "all" ? "uppercase" : "none",
+                fontWeight: selectedCategory === c ? 700 : 500,
+              }}
+              onClick={() => setSelectedCategory(c)}
+            >
+              {c === "all" ? "All Categories" : c}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* 1. Desktop Table View */}
@@ -2762,16 +3471,35 @@ function Inventory({ db, setDb, role, notify, currentUser }) {
           onDelete={deleteProduct}
           onClose={() => setSelected(null)}
           notify={notify}
+          currentUser={currentUser}
+          role={role}
+          onReceiveShortcut={onReceiveShortcut}
         />
       )}
       {showNew && <NewProductModal db={db} onCancel={() => setShowNew(false)} onSave={addProduct} notify={notify} />}
+      {showImport && <ExcelImportModal db={db} setDb={setDb} onCancel={() => setShowImport(false)} notify={notify} currentUser={currentUser} role={role} />}
+      {showAdjustment && (
+        <StockAdjustmentModal
+          db={db}
+          setDb={setDb}
+          initialProduct={adjustProduct}
+          onCancel={() => { setShowAdjustment(false); setAdjustProduct(null); }}
+          notify={notify}
+          currentUser={currentUser}
+          role={role}
+        />
+      )}
     </div>
   );
 }
 
-function ProductDrawer({ product, db, setDb, canSeeCost, onDelete, onClose, notify }) {
+/* ================= PRODUCT DETAILS DRAWER & TRANSACTION HISTORY ================= */
+function ProductDrawer({ product, db, setDb, canSeeCost, onDelete, onClose, notify, currentUser, role, onReceiveShortcut }) {
   const supplier = db.suppliers.find(s => s.id === product.supplierId);
   const [editing, setEditing] = useState(false);
+  const [adjusting, setAdjusting] = useState(false);
+  const [historyFilter, setHistoryFilter] = useState("all");
+
   const [editForm, setEditForm] = useState({
     name: product.name,
     category: product.category,
@@ -2790,6 +3518,20 @@ function ProductDrawer({ product, db, setDb, canSeeCost, onDelete, onClose, noti
 
   const unitCost = getProductUnitCost(product);
   const stockVal = getProductStockValue(product);
+  const isLow = (Number(product.stock) || 0) <= (Number(product.minStock) || 0);
+  const isOut = (Number(product.stock) || 0) <= 0;
+
+  const lastSale = getProductLastSale(product, db.sales);
+  const lastPurchase = getProductLastPurchase(product, db.purchases);
+  const fullLedger = getProductLedger(product);
+
+  const filteredLedger = useMemo(() => {
+    if (historyFilter === "all") return fullLedger;
+    if (historyFilter === "sale") return fullLedger.filter(h => h.action === "Sale" || h.qty < 0);
+    if (historyFilter === "receive") return fullLedger.filter(h => h.action === "Receive Stock" || h.action === "Received" || h.action === "Opening Stock");
+    if (historyFilter === "adjustment") return fullLedger.filter(h => h.action === "Adjustment");
+    return fullLedger;
+  }, [fullLedger, historyFilter]);
 
   function handleSaveEdit() {
     const updatedBuyPrice = Number(editForm.buyPrice) >= 0 ? Number(editForm.buyPrice) : product.buyPrice;
@@ -2818,8 +3560,8 @@ function ProductDrawer({ product, db, setDb, canSeeCost, onDelete, onClose, noti
         {
           id: uid("LOG"),
           time: todayISO(0) + " " + new Date().toTimeString().slice(0, 5),
-          user: "Owner",
-          role: "Owner",
+          user: currentUser?.name || "Owner",
+          role: role === "owner" ? "Owner" : "Storekeeper",
           category: "Product Update",
           action: `Updated details for ${editForm.name}`,
           detail: `Sell price: ${fmt(editForm.sellPrice)} · Unit Cost: ${fmt(updatedUnitCost)} · Stock: ${editForm.stock} ${editForm.baseUnit}`,
@@ -2833,23 +3575,90 @@ function ProductDrawer({ product, db, setDb, canSeeCost, onDelete, onClose, noti
     setEditing(false);
   }
 
+  function downloadMovementCSV() {
+    const headers = ["Date", "Time", "Action", "Reference", "Quantity Change", "Running Balance", "User", "Reason"];
+    const rows = fullLedger.map(h => [
+      h.date,
+      h.time || "",
+      h.action,
+      h.ref,
+      h.qty,
+      h.balance,
+      h.user,
+      `"${(h.reason || '').replace(/"/g, '""')}"`
+    ]);
+
+    const csvContent = [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `${product.name.replace(/\s+/g, '_')}_Movement_History.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    notify("success", "Movement Ledger Exported", `Downloaded transaction history for ${product.name}.`);
+  }
+
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(20,24,30,0.6)", backdropFilter: "blur(2px)", display: "flex", justifyContent: "flex-end", zIndex: 1200 }} onClick={onClose}>
-      <div className="hf-card hf-modal-card" style={{ width: 480, maxWidth: "94vw", height: "100%", borderRadius: 0, overflowY: "auto", padding: "24px 20px" }} onClick={e => e.stopPropagation()}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+      <div className="hf-card hf-modal-card" style={{ width: 560, maxWidth: "96vw", height: "100%", borderRadius: 0, overflowY: "auto", padding: "24px 20px" }} onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
           <div>
-            <div className="disp" style={{ fontSize: 24, fontWeight: 700 }}>{product.name}</div>
-            <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 2 }}>{product.sku} · {product.category} {product.brand ? `· ${product.brand}` : ""}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div className="disp" style={{ fontSize: 24, fontWeight: 700 }}>{product.name}</div>
+              <Pill tone={isOut ? "red" : isLow ? "red" : "green"}>
+                {isOut ? "OUT OF STOCK" : isLow ? "LOW STOCK" : "IN STOCK"}
+              </Pill>
+            </div>
+            <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 2 }}>
+              {product.sku} · {product.category} {product.brand ? `· ${product.brand}` : ""} · <span style={{ color: "var(--steel)" }}>{product.location || "Store"}</span>
+            </div>
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><X size={20} /></button>
         </div>
 
         {product.description && (
-          <div style={{ fontSize: 13, color: "var(--ink-soft)", marginBottom: 16, background: "var(--surface-hover)", padding: 10, borderRadius: 8 }}>
+          <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 16, background: "var(--surface-hover)", padding: 10, borderRadius: 8 }}>
             {product.description}
           </div>
         )}
 
+        {/* Quick Action Buttons */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            className="hf-btn hf-btn-ghost"
+            style={{ flex: 1, justifyContent: "center", fontSize: 12.5, borderColor: "var(--rust)", color: "var(--rust)" }}
+            onClick={() => setAdjusting(true)}
+          >
+            <SlidersHorizontal size={14} /> Adjust Stock (+ / -)
+          </button>
+          {typeof onReceiveShortcut === "function" && (
+            <button
+              type="button"
+              className="hf-btn hf-btn-ghost"
+              style={{ flex: 1, justifyContent: "center", fontSize: 12.5 }}
+              onClick={() => { onReceiveShortcut(product); onClose(); }}
+            >
+              <Truck size={14} /> Receive Stock
+            </button>
+          )}
+          {!editing && (
+            <button
+              type="button"
+              className="hf-btn hf-btn-ghost"
+              style={{ flex: 1, justifyContent: "center", fontSize: 12.5 }}
+              onClick={() => setEditing(true)}
+            >
+              <Edit3 size={14} /> Edit Details
+            </button>
+          )}
+        </div>
+
+        {/* Edit Form */}
         {editing ? (
           <div style={{ background: "var(--surface-hover)", padding: 14, borderRadius: 10, marginBottom: 16 }}>
             <div className="disp" style={{ fontSize: 16, fontWeight: 700, marginBottom: 10 }}>Edit Product Details</div>
@@ -2880,33 +3689,25 @@ function ProductDrawer({ product, db, setDb, canSeeCost, onDelete, onClose, noti
                   </div>
                 )}
               </div>
-              {canSeeCost && (
-                <div className="hf-field-grid">
-                  <div>
-                    <div className="hf-kpi-label" style={{ marginBottom: 3 }}>Pieces in Package (Conversion)</div>
-                    <input className="hf-input" type="number" min="1" value={editForm.conversionFactor} onChange={e => setEditForm({ ...editForm, conversionFactor: e.target.value })} />
-                  </div>
-                  <div>
-                    <div className="hf-kpi-label" style={{ marginBottom: 3 }}>Calculated Single Unit Cost</div>
-                    <div className="mono text-profit" style={{ padding: "10px 12px", background: "var(--surface)", border: "1.5px solid var(--line)", borderRadius: 9, fontWeight: 700 }}>
-                      {fmt((Number(editForm.buyPrice) || 0) / (Number(editForm.conversionFactor) > 0 ? Number(editForm.conversionFactor) : 1))}
-                    </div>
-                  </div>
-                </div>
-              )}
               <div className="hf-field-grid">
                 <div>
-                  <div className="hf-kpi-label" style={{ marginBottom: 3 }}>Current Stock on Hand</div>
-                  <input className="hf-input" type="number" value={editForm.stock} onChange={e => setEditForm({ ...editForm, stock: e.target.value })} />
+                  <div className="hf-kpi-label" style={{ marginBottom: 3 }}>Contractor Price (KSh)</div>
+                  <input className="hf-input" type="number" value={editForm.contractorPrice} onChange={e => setEditForm({ ...editForm, contractorPrice: e.target.value })} />
                 </div>
+                <div>
+                  <div className="hf-kpi-label" style={{ marginBottom: 3 }}>Wholesale Price (KSh)</div>
+                  <input className="hf-input" type="number" value={editForm.wholesalePrice} onChange={e => setEditForm({ ...editForm, wholesalePrice: e.target.value })} />
+                </div>
+              </div>
+              <div className="hf-field-grid">
                 <div>
                   <div className="hf-kpi-label" style={{ marginBottom: 3 }}>Low Stock Alert Level</div>
                   <input className="hf-input" type="number" value={editForm.minStock} onChange={e => setEditForm({ ...editForm, minStock: e.target.value })} />
                 </div>
-              </div>
-              <div>
-                <div className="hf-kpi-label" style={{ marginBottom: 3 }}>Location</div>
-                <input className="hf-input" value={editForm.location} onChange={e => setEditForm({ ...editForm, location: e.target.value })} />
+                <div>
+                  <div className="hf-kpi-label" style={{ marginBottom: 3 }}>Storage Location</div>
+                  <input className="hf-input" value={editForm.location} onChange={e => setEditForm({ ...editForm, location: e.target.value })} />
+                </div>
               </div>
             </div>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
@@ -2915,62 +3716,199 @@ function ProductDrawer({ product, db, setDb, canSeeCost, onDelete, onClose, noti
             </div>
           </div>
         ) : (
+          /* Comprehensive Product Details Grid */
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
-            <Stat label="Current Stock" value={`${product.stock} ${product.baseUnit}`} />
-            <Stat label="Low Stock Warning" value={`${product.minStock} ${product.baseUnit}`} />
-            {canSeeCost && <Stat label="Buying Price (Package)" value={`${fmt(product.buyPrice)} / ${product.purchaseUnit}`} />}
-            {canSeeCost && <Stat label="Unit Cost Basis" value={`${fmt(unitCost)} / ${product.baseUnit}`} />}
-            <Stat label="Selling Price" value={fmt(product.sellPrice)} />
-            <Stat label="Real-Time Stock Value" value={fmt(stockVal)} />
-            {product.contractorPrice > 0 && <Stat label="Contractor Price" value={fmt(product.contractorPrice)} />}
-            {product.wholesalePrice > 0 && <Stat label="Wholesale Price" value={fmt(product.wholesalePrice)} />}
-            <Stat label="Main Supplier" value={supplier?.name || "—"} />
-            <Stat label="Storage Location" value={product.location} />
+            <div className="hf-ticket" style={{ padding: "10px 12px" }}>
+              <div className="hf-kpi-label">Current Stock on Hand</div>
+              <div className="mono" style={{ fontSize: 18, fontWeight: 700, color: isLow ? "var(--red)" : "var(--ink)", marginTop: 2 }}>
+                {product.stock} {product.baseUnit}
+              </div>
+            </div>
+            <div className="hf-ticket" style={{ padding: "10px 12px" }}>
+              <div className="hf-kpi-label">Real-Time Stock Value</div>
+              <div className="mono text-profit" style={{ fontSize: 18, fontWeight: 700, marginTop: 2 }}>
+                {fmt(stockVal)}
+              </div>
+            </div>
+            {canSeeCost && (
+              <div className="hf-ticket" style={{ padding: "10px 12px" }}>
+                <div className="hf-kpi-label">Cost Basis (Single Unit)</div>
+                <div className="mono" style={{ fontSize: 15, fontWeight: 600, marginTop: 2 }}>
+                  {fmt(unitCost)} <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>/{product.baseUnit}</span>
+                </div>
+              </div>
+            )}
+            <div className="hf-ticket" style={{ padding: "10px 12px" }}>
+              <div className="hf-kpi-label">Normal Retail Price</div>
+              <div className="mono text-profit" style={{ fontSize: 15, fontWeight: 600, marginTop: 2 }}>
+                {fmt(product.sellPrice)}
+              </div>
+            </div>
+            <div className="hf-ticket" style={{ padding: "10px 12px" }}>
+              <div className="hf-kpi-label">Contractor Discount Price</div>
+              <div className="mono" style={{ fontSize: 14, fontWeight: 600, marginTop: 2 }}>
+                {product.contractorPrice > 0 ? fmt(product.contractorPrice) : "—"}
+              </div>
+            </div>
+            <div className="hf-ticket" style={{ padding: "10px 12px" }}>
+              <div className="hf-kpi-label">Bulk Wholesale Price</div>
+              <div className="mono" style={{ fontSize: 14, fontWeight: 600, marginTop: 2 }}>
+                {product.wholesalePrice > 0 ? fmt(product.wholesalePrice) : "—"}
+              </div>
+            </div>
+            <div className="hf-ticket" style={{ padding: "10px 12px" }}>
+              <div className="hf-kpi-label">Reorder Warning Level</div>
+              <div className="mono" style={{ fontSize: 14, fontWeight: 600, marginTop: 2 }}>
+                {product.minStock} {product.baseUnit}
+              </div>
+            </div>
+            <div className="hf-ticket" style={{ padding: "10px 12px" }}>
+              <div className="hf-kpi-label">Main Supplier</div>
+              <div style={{ fontSize: 13.5, fontWeight: 600, marginTop: 2 }}>
+                {supplier?.name || "—"}
+              </div>
+            </div>
+            <div className="hf-ticket" style={{ padding: "10px 12px" }}>
+              <div className="hf-kpi-label">Last Sale Recorded</div>
+              <div style={{ fontSize: 13, fontWeight: 600, marginTop: 2 }}>
+                {lastSale ? `${niceDate(lastSale.date)} (${lastSale.invoiceNo || 'Sale'})` : "No sales yet"}
+              </div>
+            </div>
+            <div className="hf-ticket" style={{ padding: "10px 12px" }}>
+              <div className="hf-kpi-label">Last Purchase / Received</div>
+              <div style={{ fontSize: 13, fontWeight: 600, marginTop: 2 }}>
+                {lastPurchase ? `${niceDate(lastPurchase.date)} (${lastPurchase.poNumber || 'Delivery'})` : "No purchases yet"}
+              </div>
+            </div>
           </div>
         )}
 
+        {/* Packaging Conversion Note */}
         {product.purchaseUnit !== product.baseUnit && (
-          <div className="hf-ticket" style={{ padding: 12, marginBottom: 16, fontSize: 12.5 }}>
-            <b>Packaging Conversion:</b> Bought in {product.purchaseUnit}s (1 {product.purchaseUnit} = {product.conversionFactor} {product.baseUnit}s), sold by the {product.baseUnit}.
+          <div className="hf-ticket" style={{ padding: 10, marginBottom: 16, fontSize: 12 }}>
+            <b>Packaging Conversion:</b> Purchased in {product.purchaseUnit}s (1 {product.purchaseUnit} = {product.conversionFactor} {product.baseUnit}s), sold individually by {product.baseUnit}.
           </div>
         )}
 
-        {/* Action buttons: Edit & Remove */}
-        <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
-          {!editing && (
-            <button className="hf-btn hf-btn-ghost" style={{ flex: 1, justifyContent: "center" }} onClick={() => setEditing(true)}>
-              <Edit3 size={14} /> Quick Edit
+        {/* 2. Full Inventory Movement History Section */}
+        <div style={{ marginTop: 8, marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <div className="disp" style={{ fontSize: 16, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}>
+              <History size={16} />
+              <span>Inventory Transaction History</span>
+            </div>
+            <button
+              type="button"
+              className="hf-btn hf-btn-ghost"
+              style={{ fontSize: 11.5, padding: "4px 8px" }}
+              onClick={downloadMovementCSV}
+              title="Download full movement history as CSV"
+            >
+              <Download size={13} /> Export CSV
             </button>
-          )}
+          </div>
+
+          {/* Filter Tabs */}
+          <div style={{ display: "flex", gap: 4, marginBottom: 10, overflowX: "auto" }}>
+            {[
+              { key: "all", label: `All (${fullLedger.length})` },
+              { key: "sale", label: "Sales (-)" },
+              { key: "receive", label: "Deliveries (+)" },
+              { key: "adjustment", label: "Adjustments" },
+            ].map(t => (
+              <button
+                key={t.key}
+                type="button"
+                className="hf-btn"
+                style={{
+                  fontSize: 11.5,
+                  padding: "4px 10px",
+                  background: historyFilter === t.key ? "var(--rust)" : "var(--surface-hover)",
+                  color: historyFilter === t.key ? "#fff" : "var(--ink)",
+                  border: "1px solid var(--line)",
+                  borderRadius: 6,
+                }}
+                onClick={() => setHistoryFilter(t.key)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Ledger Table */}
+          <div style={{ border: "1px solid var(--line)", borderRadius: 8, overflow: "hidden" }}>
+            <table className="hf-table" style={{ fontSize: 12 }}>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Action & Ref</th>
+                  <th style={{ textAlign: "right" }}>Quantity</th>
+                  <th style={{ textAlign: "right" }}>Balance</th>
+                  <th>User</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...filteredLedger].reverse().map((h, i) => {
+                  const isPositive = Number(h.qty) > 0;
+                  return (
+                    <tr key={i}>
+                      <td>
+                        <div style={{ fontWeight: 600 }}>{niceDate(h.date)}</div>
+                        {h.time && <div style={{ fontSize: 10.5, color: "var(--ink-soft)" }}>{h.time}</div>}
+                      </td>
+                      <td>
+                        <div style={{ fontWeight: 600 }}>{h.action}</div>
+                        <div style={{ fontSize: 10.5, color: "var(--ink-soft)" }}>
+                          {h.ref} {h.reason ? `· ${h.reason}` : ""}
+                        </div>
+                      </td>
+                      <td className="mono" style={{ textAlign: "right", color: isPositive ? "var(--green)" : "var(--red)", fontWeight: 700 }}>
+                        {isPositive ? `+${h.qty}` : h.qty}
+                      </td>
+                      <td className="mono" style={{ textAlign: "right", fontWeight: 700 }}>
+                        {h.balance}
+                      </td>
+                      <td style={{ color: "var(--ink-soft)" }}>{h.user}</td>
+                    </tr>
+                  );
+                })}
+                {filteredLedger.length === 0 && (
+                  <tr>
+                    <td colSpan={5} style={{ textAlign: "center", color: "var(--ink-soft)", padding: 18 }}>
+                      No transaction records match filter.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Delete Product Action */}
+        <div style={{ marginTop: 16, borderTop: "1px solid var(--line)", paddingTop: 14, display: "flex", justifyContent: "flex-end" }}>
           <button
+            type="button"
             className="hf-btn hf-btn-ghost"
-            style={{ color: "var(--red)", borderColor: "var(--red-tint)", flex: 1, justifyContent: "center" }}
+            style={{ color: "var(--red)", borderColor: "var(--red-tint)", fontSize: 12.5 }}
             onClick={() => onDelete(product.id)}
             title="Permanently remove this product from inventory"
           >
-            <Trash2 size={14} /> Remove Product
+            <Trash2 size={13} /> Permanently Delete Product
           </button>
         </div>
 
-        <div className="disp" style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>Stock Movement History</div>
-        <table className="hf-table">
-          <thead><tr><th>Date</th><th>Action</th><th>Quantity</th><th>User</th></tr></thead>
-          <tbody>
-            {[...product.history].reverse().map((h, i) => (
-              <tr key={i}>
-                <td>{niceDate(h.date)}</td>
-                <td>{h.action}</td>
-                <td className="mono" style={{ color: h.qty < 0 ? "var(--red)" : "var(--green)", fontWeight: 600 }}>
-                  {h.qty > 0 ? "+" : ""}{h.qty}
-                </td>
-                <td>{h.user}</td>
-              </tr>
-            ))}
-            {product.history.length === 0 && (
-              <tr><td colSpan={4} style={{ color: "var(--ink-soft)", textAlign: "center", padding: 16 }}>No movement recorded yet.</td></tr>
-            )}
-          </tbody>
-        </table>
+        {/* Nested Stock Adjustment Modal */}
+        {adjusting && (
+          <StockAdjustmentModal
+            db={db}
+            setDb={setDb}
+            initialProduct={product}
+            onCancel={() => setAdjusting(false)}
+            notify={notify}
+            currentUser={currentUser}
+            role={role}
+          />
+        )}
       </div>
     </div>
   );
@@ -3180,17 +4118,62 @@ function Receiving({ db, setDb, notify, currentUser, prefill, onClearPrefill }) 
     const timeStr = new Date().toTimeString().slice(0, 5);
 
     setDb(prev => {
+      const nextPoSeq = (prev.poSeq || 2046) + 1;
+      const poNumber = invoiceRef.trim() || `PO-${nextPoSeq}`;
+
+      const purchaseItems = validLines.map(l => {
+        const prod = prev.products.find(p => p.id === l.productId);
+        const itemBuy = Number(l.buyPrice) || prod?.buyPrice || 0;
+        return {
+          productId: l.productId,
+          productName: prod?.name || "Product",
+          qty: Number(l.qty),
+          unit: prod?.purchaseUnit || "piece",
+          unitPrice: itemBuy,
+          lineTotal: Number(l.qty) * itemBuy,
+        };
+      });
+
+      const purchaseEntry = {
+        id: uid("PO"),
+        poNumber: poNumber,
+        supplierId: supp?.id || null,
+        supplierName: supp?.name || "Supplier",
+        date: today,
+        time: timeStr,
+        items: purchaseItems,
+        total,
+        payment: paymentMode,
+        receivedBy: operator,
+        notes: `Delivery received from ${supp?.name || 'Supplier'} (${invoiceRef || 'No Invoice Ref'})`,
+      };
+
       const products = prev.products.map(p => {
         const line = validLines.find(l => l.productId === p.id);
         if (!line) return p;
         const purchaseQty = Number(line.qty);
         const baseQty = purchaseQty * (p.conversionFactor || 1);
         const newBuy = Number(line.buyPrice) || p.buyPrice;
+        const newStock = (Number(p.stock) || 0) + baseQty;
+
         return {
           ...p,
-          stock: p.stock + baseQty,
+          stock: newStock,
           buyPrice: newBuy,
-          history: [...p.history, { date: today, action: "Received", qty: baseQty, user: operator }],
+          history: [
+            ...(p.history || []),
+            {
+              id: uid("H"),
+              date: today,
+              time: timeStr,
+              action: "Receive Stock",
+              ref: poNumber,
+              qty: baseQty,
+              balance: newStock,
+              user: operator,
+              reason: `Stock delivery from ${supp?.name || "Supplier"}`,
+            }
+          ],
         };
       });
 
@@ -3204,7 +4187,7 @@ function Receiving({ db, setDb, notify, currentUser, prefill, onClearPrefill }) 
           date: today,
           category: "Stock Purchase",
           amount: total,
-          description: `Stock delivery from ${supp?.name || "Supplier"} (${invoiceRef || "Direct Purchase"})`,
+          description: `Stock delivery from ${supp?.name || "Supplier"} (${invoiceRef || poNumber})`,
           payment: paymentMode,
           supplierId: supp?.id || null,
         };
@@ -3225,14 +4208,16 @@ function Receiving({ db, setDb, notify, currentUser, prefill, onClearPrefill }) 
         user: operator,
         role: "Storekeeper",
         category: "Stock Received",
-        action: `Received stock delivery from ${supp?.name || "Supplier"} (${paymentMode === "credit" ? "On Credit" : "Paid " + paymentMode.toUpperCase()})`,
-        detail: `${fmt(total)} (${invoiceRef || "No Invoice Ref"})`,
+        action: `Received stock delivery ${poNumber} from ${supp?.name || "Supplier"} (${paymentMode === "credit" ? "On Credit" : "Paid " + paymentMode.toUpperCase()})`,
+        detail: `${fmt(total)} · ${purchaseItems.length} item(s)`,
         target: supp?.name || "Supplier",
       };
 
       return {
         ...prev,
         products,
+        purchases: [purchaseEntry, ...(prev.purchases || [])],
+        poSeq: nextPoSeq,
         expenses: updatedExpenses,
         suppliers: updatedSuppliers,
         auditLog: [auditEntry, ...prev.auditLog]
@@ -3810,6 +4795,79 @@ function SupplierDrawer({ supplier, db, onPay, onClearBalance, onDeletePayment, 
               Confirm & Deduct Balance
             </button>
           </div>
+        </div>
+
+        {/* Supplier Purchase History & Deliveries */}
+        <div style={{ marginBottom: 22 }}>
+          <div className="disp" style={{ fontSize: 16, fontWeight: 700, marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span>Supplier Purchase History</span>
+            <span style={{ fontSize: 12, color: "var(--ink-soft)", fontWeight: 500 }}>
+              {(db.purchases || []).filter(p => p.supplierId === supplier.id).length} order(s)
+            </span>
+          </div>
+
+          {/* Total Purchased Summary Ticket */}
+          <div className="hf-ticket" style={{ padding: "12px 14px", marginBottom: 10, display: "flex", justifyContent: "space-between", alignItems: "center", background: "var(--surface-hover)" }}>
+            <div>
+              <div className="hf-kpi-label">Total Purchased Volume</div>
+              <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginTop: 1 }}>Cumulative inventory supplied to date</div>
+            </div>
+            <div className="mono text-profit" style={{ fontSize: 20, fontWeight: 700 }}>
+              {fmt(
+                (db.purchases || []).filter(p => p.supplierId === supplier.id).reduce((a, p) => a + Number(p.total), 0) || supplier.total || 0
+              )}
+            </div>
+          </div>
+
+          {(() => {
+            const suppPurchases = (db.purchases || []).filter(p => p.supplierId === supplier.id);
+            if (suppPurchases.length === 0) {
+              return (
+                <div style={{ color: "var(--ink-soft)", fontSize: 12.5, padding: "12px 0", textAlign: "center", background: "var(--surface-hover)", borderRadius: 8 }}>
+                  No purchase records logged for this supplier yet.
+                </div>
+              );
+            }
+            return (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 220, overflowY: "auto" }}>
+                {suppPurchases.map(p => (
+                  <div
+                    key={p.id}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      padding: "9px 12px",
+                      background: "var(--surface-hover)",
+                      border: "1px solid var(--line)",
+                      borderRadius: 8,
+                      fontSize: 12.5,
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
+                        <span>{niceDate(p.date)}</span>
+                        <span className="mono" style={{ background: "var(--surface)", padding: "1px 6px", borderRadius: 4, fontSize: 11, border: "1px solid var(--line)" }}>
+                          {p.poNumber}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 2, maxWidth: 260, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {(p.items || []).map(i => `${i.qty} × ${i.productName}`).join(", ") || p.notes || "Stock delivery"}
+                      </div>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <div className="mono text-profit" style={{ fontWeight: 700, fontSize: 14 }}>
+                        {fmt(p.total)}
+                      </div>
+                      <div style={{ fontSize: 10.5, color: "var(--ink-soft)", textTransform: "uppercase" }}>
+                        {p.payment === "credit" ? "On Credit" : `Paid ${String(p.payment).toUpperCase()}`}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
         </div>
 
         {/* Payment History Ledger */}
@@ -5456,7 +6514,19 @@ export default function App() {
     dashboard: <Dashboard db={db} role={role} notify={notify} />,
     alerts: <Alerts db={db} setDb={setDb} notify={notify} role={role} onRestock={handleAlertRestock} onNavigate={(p) => setPage(p)} />,
     pos: <POS db={db} setDb={setDb} role={role} notify={notify} currentUser={currentUser} />,
-    inventory: <Inventory db={db} setDb={setDb} role={role} notify={notify} currentUser={currentUser} />,
+    inventory: (
+      <Inventory
+        db={db}
+        setDb={setDb}
+        role={role}
+        notify={notify}
+        currentUser={currentUser}
+        onReceiveShortcut={(prod) => {
+          setReceivingPrefill({ supplierId: prod.supplierId, productId: prod.id, qty: 1 });
+          setPage("receiving");
+        }}
+      />
+    ),
     receiving: <Receiving db={db} setDb={setDb} notify={notify} currentUser={currentUser} prefill={receivingPrefill} onClearPrefill={() => setReceivingPrefill(null)} />,
     suppliers: <Suppliers db={db} setDb={setDb} notify={notify} currentUser={currentUser} />,
     customers: <Customers db={db} setDb={setDb} notify={notify} currentUser={currentUser} />,
