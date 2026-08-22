@@ -250,10 +250,10 @@ export function LoginScreen({ db, onLogin, onForgotPassword, notify, theme, onTo
           <div style={{ marginBottom: 15 }}>
             <div className="hf-kpi-label" style={{ marginBottom: 4 }}>Username or Phone</div>
             <div style={{ position: "relative" }}>
-              <User size={16} style={{ position: "absolute", left: 12, top: 13, color: "var(--ink-soft)" }} />
+              <User size={16} style={{ position: "absolute", left: 13, top: "50%", transform: "translateY(-50%)", color: "var(--ink-soft)", pointerEvents: "none" }} />
               <input
-                className="hf-input"
-                style={{ paddingLeft: 36 }}
+                className="hf-input hf-input-with-left-icon"
+                style={{ paddingLeft: 42 }}
                 placeholder="e.g. owner, cashier, or phone"
                 value={username}
                 onChange={handleUsernameChange}
@@ -275,11 +275,11 @@ export function LoginScreen({ db, onLogin, onForgotPassword, notify, theme, onTo
               </button>
             </div>
             <div style={{ position: "relative" }}>
-              <KeyRound size={16} style={{ position: "absolute", left: 12, top: 13, color: "var(--ink-soft)" }} />
+              <KeyRound size={16} style={{ position: "absolute", left: 13, top: "50%", transform: "translateY(-50%)", color: "var(--ink-soft)", pointerEvents: "none" }} />
               <input
-                className="hf-input"
+                className="hf-input hf-input-with-both-icons"
                 type={showPassword ? "text" : "password"}
-                style={{ paddingLeft: 36, paddingRight: 40 }}
+                style={{ paddingLeft: 42, paddingRight: 42 }}
                 placeholder="Enter account password"
                 value={password}
                 onChange={e => { setPassword(e.target.value); setError(""); }}
@@ -291,12 +291,16 @@ export function LoginScreen({ db, onLogin, onForgotPassword, notify, theme, onTo
                 style={{
                   position: "absolute",
                   right: 10,
-                  top: 10,
+                  top: "50%",
+                  transform: "translateY(-50%)",
                   background: "none",
                   border: "none",
                   cursor: "pointer",
                   color: "var(--ink-soft)",
                   padding: 4,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
                 }}
               >
                 {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -557,9 +561,10 @@ export function ForgotPasswordModal({ db, setDb, onClose, notify }) {
               </div>
               <div style={{ position: "relative" }}>
                 <input
-                  className="hf-input mono"
+                  className="hf-input mono hf-input-with-right-icon"
                   type={showPin ? "text" : "password"}
                   maxLength={6}
+                  style={{ paddingRight: 42 }}
                   placeholder="Enter 4-6 digit PIN"
                   value={pin}
                   onChange={e => { setPin(e.target.value.replace(/\D/g, "")); setError(""); }}
@@ -571,12 +576,16 @@ export function ForgotPasswordModal({ db, setDb, onClose, notify }) {
                   style={{
                     position: "absolute",
                     right: 10,
-                    top: 10,
+                    top: "50%",
+                    transform: "translateY(-50%)",
                     background: "none",
                     border: "none",
                     cursor: "pointer",
                     color: "var(--ink-soft)",
-                    padding: 2,
+                    padding: 4,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
                   }}
                 >
                   {showPin ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -601,8 +610,9 @@ export function ForgotPasswordModal({ db, setDb, onClose, notify }) {
               <div className="hf-kpi-label" style={{ marginBottom: 4 }}>New Password (min 6 characters)</div>
               <div style={{ position: "relative" }}>
                 <input
-                  className="hf-input"
+                  className="hf-input hf-input-with-right-icon"
                   type={showPass ? "text" : "password"}
+                  style={{ paddingRight: 42 }}
                   placeholder="Enter new strong password"
                   value={newPass}
                   onChange={e => { setNewPass(e.target.value); setError(""); }}
@@ -614,12 +624,16 @@ export function ForgotPasswordModal({ db, setDb, onClose, notify }) {
                   style={{
                     position: "absolute",
                     right: 10,
-                    top: 10,
+                    top: "50%",
+                    transform: "translateY(-50%)",
                     background: "none",
                     border: "none",
                     cursor: "pointer",
                     color: "var(--ink-soft)",
-                    padding: 2,
+                    padding: 4,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
                   }}
                 >
                   {showPass ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -883,9 +897,10 @@ export function ProfileModal({ currentUser, db, setDb, onUserUpdate, onClose, no
               <div className="hf-kpi-label" style={{ marginBottom: 4 }}>New PIN (Leave blank to keep)</div>
               <div style={{ position: "relative" }}>
                 <input
-                  className="hf-input mono"
+                  className="hf-input mono hf-input-with-right-icon"
                   type={showPin ? "text" : "password"}
                   maxLength={6}
+                  style={{ paddingRight: 40 }}
                   placeholder="e.g. 4829"
                   value={newPin}
                   onChange={e => setNewPin(e.target.value.replace(/\D/g, ""))}
@@ -893,7 +908,7 @@ export function ProfileModal({ currentUser, db, setDb, onUserUpdate, onClose, no
                 <button
                   type="button"
                   onClick={() => setShowPin(!showPin)}
-                  style={{ position: "absolute", right: 8, top: 9, background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)" }}
+                  style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)", padding: 4, display: "flex", alignItems: "center", justifyContent: "center" }}
                 >
                   {showPin ? <EyeOff size={15} /> : <Eye size={15} />}
                 </button>
@@ -926,8 +941,9 @@ export function ProfileModal({ currentUser, db, setDb, onUserUpdate, onClose, no
               <div className="hf-kpi-label" style={{ marginBottom: 4 }}>New Password</div>
               <div style={{ position: "relative" }}>
                 <input
-                  className="hf-input"
+                  className="hf-input hf-input-with-right-icon"
                   type={showPass ? "text" : "password"}
+                  style={{ paddingRight: 40 }}
                   placeholder="New password"
                   value={newPass}
                   onChange={e => setNewPass(e.target.value)}
@@ -935,7 +951,7 @@ export function ProfileModal({ currentUser, db, setDb, onUserUpdate, onClose, no
                 <button
                   type="button"
                   onClick={() => setShowPass(!showPass)}
-                  style={{ position: "absolute", right: 8, top: 9, background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)" }}
+                  style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)", padding: 4, display: "flex", alignItems: "center", justifyContent: "center" }}
                 >
                   {showPass ? <EyeOff size={15} /> : <Eye size={15} />}
                 </button>
@@ -1472,8 +1488,9 @@ export function UserManagementModal({ currentUser, db, setDb, onClose, notify })
                 <div className="hf-kpi-label" style={{ marginBottom: 3 }}>Initial Password (min 6 chars) *</div>
                 <div style={{ position: "relative" }}>
                   <input
-                    className="hf-input"
+                    className="hf-input hf-input-with-right-icon"
                     type={showNewPass ? "text" : "password"}
+                    style={{ paddingRight: 40 }}
                     placeholder="Enter initial password"
                     value={newUser.password}
                     onChange={e => setNewUser({ ...newUser, password: e.target.value })}
@@ -1481,7 +1498,7 @@ export function UserManagementModal({ currentUser, db, setDb, onClose, notify })
                   <button
                     type="button"
                     onClick={() => setShowNewPass(!showNewPass)}
-                    style={{ position: "absolute", right: 8, top: 9, background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)" }}
+                    style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)", padding: 4, display: "flex", alignItems: "center", justifyContent: "center" }}
                   >
                     {showNewPass ? <EyeOff size={15} /> : <Eye size={15} />}
                   </button>
@@ -1495,9 +1512,10 @@ export function UserManagementModal({ currentUser, db, setDb, onClose, notify })
                 <div className="hf-kpi-label" style={{ marginBottom: 3 }}>Initial Security Recovery PIN (4–6 digits)</div>
                 <div style={{ position: "relative" }}>
                   <input
-                    className="hf-input mono"
+                    className="hf-input mono hf-input-with-right-icon"
                     type={showNewPin ? "text" : "password"}
                     maxLength={6}
+                    style={{ paddingRight: 40 }}
                     placeholder="Default: 1234"
                     value={newUser.pin}
                     onChange={e => setNewUser({ ...newUser, pin: e.target.value.replace(/\D/g, "") })}
@@ -1505,7 +1523,7 @@ export function UserManagementModal({ currentUser, db, setDb, onClose, notify })
                   <button
                     type="button"
                     onClick={() => setShowNewPin(!showNewPin)}
-                    style={{ position: "absolute", right: 8, top: 9, background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)" }}
+                    style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)", padding: 4, display: "flex", alignItems: "center", justifyContent: "center" }}
                   >
                     {showNewPin ? <EyeOff size={15} /> : <Eye size={15} />}
                   </button>
@@ -1557,9 +1575,10 @@ export function UserManagementModal({ currentUser, db, setDb, onClose, notify })
               <div className="hf-kpi-label" style={{ marginBottom: 3 }}>New Recovery PIN (4–6 numeric digits) *</div>
               <div style={{ position: "relative" }}>
                 <input
-                  className="hf-input mono"
+                  className="hf-input mono hf-input-with-right-icon"
                   type={showEmpPin ? "text" : "password"}
                   maxLength={6}
+                  style={{ paddingRight: 40 }}
                   placeholder="Enter 4-6 digits"
                   value={empPin}
                   onChange={e => { setEmpPin(e.target.value.replace(/\D/g, "")); setPinError(""); }}
@@ -1568,7 +1587,7 @@ export function UserManagementModal({ currentUser, db, setDb, onClose, notify })
                 <button
                   type="button"
                   onClick={() => setShowEmpPin(!showEmpPin)}
-                  style={{ position: "absolute", right: 8, top: 9, background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)" }}
+                  style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)", padding: 4, display: "flex", alignItems: "center", justifyContent: "center" }}
                 >
                   {showEmpPin ? <EyeOff size={15} /> : <Eye size={15} />}
                 </button>
@@ -1674,8 +1693,9 @@ export function UserManagementModal({ currentUser, db, setDb, onClose, notify })
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                 <div style={{ position: "relative" }}>
                   <input
-                    className="hf-input"
+                    className="hf-input hf-input-with-right-icon"
                     type={showResetPass ? "text" : "password"}
+                    style={{ paddingRight: 40 }}
                     placeholder="New password (min 6)"
                     value={resetPass}
                     onChange={e => setResetPass(e.target.value)}
@@ -1683,7 +1703,7 @@ export function UserManagementModal({ currentUser, db, setDb, onClose, notify })
                   <button
                     type="button"
                     onClick={() => setShowResetPass(!showResetPass)}
-                    style={{ position: "absolute", right: 6, top: 9, background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)" }}
+                    style={{ position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)", padding: 4, display: "flex", alignItems: "center", justifyContent: "center" }}
                   >
                     {showResetPass ? <EyeOff size={14} /> : <Eye size={14} />}
                   </button>

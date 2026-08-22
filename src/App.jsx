@@ -405,7 +405,10 @@ const GlobalStyle = ({ theme }) => {
         -webkit-font-smoothing: antialiased;
         transition: background .2s ease, color .2s ease;
         width: 100%;
+        max-width: 100%;
         min-height: 100vh;
+        box-sizing: border-box;
+        overflow-x: hidden;
       }
       .hf-root .disp { font-family: 'Barlow Condensed', sans-serif; letter-spacing: 0.01em; }
       .hf-root .mono { font-family: 'IBM Plex Mono', monospace; font-feature-settings: "tnum"; }
@@ -452,6 +455,16 @@ const GlobalStyle = ({ theme }) => {
       }
       .hf-input:focus { outline: none; border-color: var(--rust); box-shadow: 0 0 0 3.5px var(--rust-tint); }
       .hf-input:hover:not(:focus) { border-color: ${isDark ? "#3A455A" : "#C9CDD3"}; }
+      .hf-input-with-left-icon {
+        padding-left: 42px !important;
+      }
+      .hf-input-with-right-icon {
+        padding-right: 42px !important;
+      }
+      .hf-input-with-both-icons {
+        padding-left: 42px !important;
+        padding-right: 42px !important;
+      }
       .hf-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       .hf-table th {
         text-align: left; font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase;
@@ -482,11 +495,12 @@ const GlobalStyle = ({ theme }) => {
       .hf-root {
         display: flex;
         flex-direction: row;
-        width: 100vw;
+        width: 100%;
         max-width: 100%;
         min-height: 100vh;
         background: var(--bg);
         overflow-x: hidden;
+        box-sizing: border-box;
       }
       .hf-sidebar {
         width: 240px;
@@ -502,14 +516,18 @@ const GlobalStyle = ({ theme }) => {
         flex-direction: column;
         min-width: 0;
         width: 100%;
-        overflow: hidden;
+        max-width: 100%;
+        overflow-x: hidden;
+        box-sizing: border-box;
       }
       .hf-main-content-wrap {
         flex: 1;
         overflow-y: auto;
         padding: 24px 32px;
         width: 100%;
+        max-width: 100%;
         box-sizing: border-box;
+        overflow-x: hidden;
       }
 
       /* Valuation Summary Banner */
@@ -571,6 +589,7 @@ const GlobalStyle = ({ theme }) => {
           width: 100% !important;
           min-width: 100% !important;
           min-height: 100vh !important;
+          box-sizing: border-box !important;
           overflow-x: hidden !important;
         }
 
@@ -578,7 +597,7 @@ const GlobalStyle = ({ theme }) => {
           display: flex !important;
           align-items: center;
           justify-content: space-between;
-          padding: max(12px, env(safe-area-inset-top, 12px)) 16px 12px !important;
+          padding: max(10px, env(safe-area-inset-top, 10px)) 14px 10px !important;
           background: var(--tab-bg);
           color: #fff;
           position: sticky;
@@ -587,6 +606,7 @@ const GlobalStyle = ({ theme }) => {
           border-bottom: 1px solid rgba(255,255,255,0.08);
           box-shadow: 0 2px 10px rgba(0,0,0,0.25);
           width: 100% !important;
+          max-width: 100% !important;
           box-sizing: border-box !important;
         }
 
@@ -625,6 +645,7 @@ const GlobalStyle = ({ theme }) => {
         .hf-main-wrap {
           width: 100% !important;
           max-width: 100% !important;
+          box-sizing: border-box !important;
           overflow-x: hidden !important;
         }
 
@@ -719,7 +740,24 @@ const GlobalStyle = ({ theme }) => {
         .hf-input {
           font-size: 16px !important; /* Prevents auto-zoom in iOS Safari */
           min-height: 44px !important;
-          padding: 10px 14px !important;
+          padding-top: 10px !important;
+          padding-bottom: 10px !important;
+          padding-left: 14px;
+          padding-right: 14px;
+          box-sizing: border-box !important;
+        }
+        .hf-input.hf-input-with-left-icon,
+        .hf-input-with-left-icon {
+          padding-left: 42px !important;
+        }
+        .hf-input.hf-input-with-right-icon,
+        .hf-input-with-right-icon {
+          padding-right: 42px !important;
+        }
+        .hf-input.hf-input-with-both-icons,
+        .hf-input-with-both-icons {
+          padding-left: 42px !important;
+          padding-right: 42px !important;
         }
 
         /* Mobile Modal Bottom Sheet */
@@ -1001,14 +1039,14 @@ function Dashboard({ db, role, notify }) {
   return (
     <div>
       {/* Dashboard Top Header & Period Filter */}
-      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 18 }}>
-        <div>
-          <div className="disp" style={{ fontSize: 28, fontWeight: 700 }}>{periodTitle}</div>
-          <div style={{ color: "var(--ink-soft)", fontSize: 13, marginTop: 2 }}>{periodSubtitle}</div>
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 18, width: "100%", maxWidth: "100%", boxSizing: "border-box" }}>
+        <div style={{ minWidth: 0 }}>
+          <div className="disp" style={{ fontSize: 26, fontWeight: 700, lineHeight: 1.15 }}>{periodTitle}</div>
+          <div style={{ color: "var(--ink-soft)", fontSize: 12.5, marginTop: 2 }}>{periodSubtitle}</div>
         </div>
 
         {/* Period Selector Toggle */}
-        <div style={{ display: "flex", background: "var(--surface-hover)", padding: 3, borderRadius: 10, border: "1px solid var(--line)" }}>
+        <div style={{ display: "flex", background: "var(--surface-hover)", padding: 3, borderRadius: 10, border: "1px solid var(--line)", maxWidth: "100%", overflowX: "auto", WebkitOverflowScrolling: "touch", flexShrink: 0 }}>
           {[
             { key: "today", label: "Today" },
             { key: "week", label: "7 Days" },
@@ -1028,6 +1066,7 @@ function Dashboard({ db, role, notify }) {
                   borderRadius: 7,
                   border: "none",
                   cursor: "pointer",
+                  whiteSpace: "nowrap",
                   background: isActive ? "var(--rust)" : "transparent",
                   color: isActive ? "#FFFFFF" : "var(--ink)",
                   boxShadow: isActive ? "0 2px 6px rgba(193,80,47,0.3)" : "none",
@@ -1798,10 +1837,10 @@ function POS({ db, setDb, role, notify, currentUser }) {
           <div>
             <div className="disp" style={{ fontSize: 26, fontWeight: 700, marginBottom: 12 }}>New Sale</div>
             <div style={{ position: "relative", marginBottom: 10 }}>
-              <Search size={15} style={{ position: "absolute", left: 10, top: 11, color: "var(--ink-soft)" }} />
+              <Search size={15} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--ink-soft)", pointerEvents: "none" }} />
               <input
-                className="hf-input"
-                style={{ paddingLeft: 32 }}
+                className="hf-input hf-input-with-left-icon"
+                style={{ paddingLeft: 38 }}
                 placeholder="Search product name or SKU to add to cart…"
                 value={query}
                 onChange={e => setQuery(e.target.value)}
@@ -2200,10 +2239,10 @@ function POS({ db, setDb, role, notify, currentUser }) {
               <div>
                 <div className="hf-kpi-label" style={{ marginBottom: 4 }}>Search Invoices / Items</div>
                 <div style={{ position: "relative" }}>
-                  <Search size={14} style={{ position: "absolute", left: 10, top: 11, color: "var(--ink-soft)" }} />
+                  <Search size={14} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--ink-soft)", pointerEvents: "none" }} />
                   <input
-                    className="hf-input"
-                    style={{ paddingLeft: 30 }}
+                    className="hf-input hf-input-with-left-icon"
+                    style={{ paddingLeft: 38 }}
                     placeholder="Invoice #, customer, item…"
                     value={histSearch}
                     onChange={e => setHistSearch(e.target.value)}
@@ -2570,10 +2609,10 @@ function Inventory({ db, setDb, role, notify, currentUser }) {
 
       {/* Search Filter */}
       <div style={{ position: "relative", marginBottom: 14, maxWidth: 360 }}>
-        <Search size={15} style={{ position: "absolute", left: 11, top: 13, color: "var(--ink-soft)" }} />
+        <Search size={15} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--ink-soft)", pointerEvents: "none" }} />
         <input
-          className="hf-input"
-          style={{ paddingLeft: 34 }}
+          className="hf-input hf-input-with-left-icon"
+          style={{ paddingLeft: 38 }}
           placeholder="Search products by name, SKU, or category…"
           value={query}
           onChange={e => setQuery(e.target.value)}
@@ -4705,8 +4744,8 @@ function AuditLog({ db, notify }) {
             <Download size={15} /> Download PDF
           </button>
           <div style={{ position: "relative" }}>
-            <Search size={14} style={{ position: "absolute", left: 10, top: 11, color: "var(--ink-soft)" }} />
-            <input className="hf-input" style={{ paddingLeft: 30, width: 220 }} placeholder="Search action, user, amount…" value={query} onChange={e => setQuery(e.target.value)} />
+            <Search size={14} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--ink-soft)", pointerEvents: "none" }} />
+            <input className="hf-input hf-input-with-left-icon" style={{ paddingLeft: 38, width: 220 }} placeholder="Search action, user, amount…" value={query} onChange={e => setQuery(e.target.value)} />
           </div>
           <select className="hf-input" style={{ width: 140 }} value={user} onChange={e => setUser(e.target.value)}>
             {users.map(u => <option key={u} value={u}>{u === "all" ? "All Users" : u}</option>)}
@@ -4994,10 +5033,10 @@ function Alerts({ db, setDb, notify, role, onRestock, onNavigate }) {
 
         {/* Search Filter */}
         <div style={{ position: "relative", minWidth: 220 }}>
-          <Search size={15} style={{ position: "absolute", left: 10, top: 11, color: "var(--ink-soft)" }} />
+          <Search size={15} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--ink-soft)", pointerEvents: "none" }} />
           <input
-            className="hf-input"
-            style={{ paddingLeft: 32, fontSize: 13, height: 36, minHeight: 36 }}
+            className="hf-input hf-input-with-left-icon"
+            style={{ paddingLeft: 38, fontSize: 13, height: 36, minHeight: 36 }}
             placeholder="Search items or people…"
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
@@ -5512,27 +5551,30 @@ export default function App() {
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <button
               type="button"
-              onClick={() => setMobileNavOpen(!mobileNavOpen)}
-              style={{ background: "transparent", border: "none", color: "#fff", cursor: "pointer", display: "flex", padding: 4 }}
-              title="Open Menu"
+              onClick={() => setMobileNavOpen(true)}
+              style={{ background: "transparent", border: "none", color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 6, borderRadius: 8 }}
+              title="Open Navigation Menu"
             >
               <Menu size={22} />
             </button>
-            <div className="disp" style={{ fontSize: 17, fontWeight: 700, letterSpacing: "0.02em" }}>
+            <div className="disp" style={{ fontSize: 18, fontWeight: 700, letterSpacing: "0.02em" }}>
               HARDWARE<span style={{ color: "#E8977E" }}>FLOW</span>
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            {/* Mobile Notification Bell */}
+            {/* Mobile Notification Bell & Dropdown */}
             <div style={{ position: "relative" }}>
               <button
                 type="button"
-                onClick={() => setShowAlertsFlyout(!showAlertsFlyout)}
+                onClick={() => {
+                  setShowAlertsFlyout(!showAlertsFlyout);
+                  setUserDropdown(false);
+                }}
                 style={{
                   background: "rgba(255,255,255,0.1)",
                   border: "none",
                   color: "#fff",
-                  padding: "6px 8px",
+                  padding: "7px 9px",
                   borderRadius: 8,
                   cursor: "pointer",
                   display: "flex",
@@ -5563,6 +5605,95 @@ export default function App() {
                   </span>
                 )}
               </button>
+
+              {/* Mobile Alerts Dropdown Flyout */}
+              {showAlertsFlyout && (
+                <>
+                  <div
+                    style={{ position: "fixed", inset: 0, zIndex: 1100, background: "rgba(0,0,0,0.3)" }}
+                    onClick={() => setShowAlertsFlyout(false)}
+                  />
+                  <div
+                    className="hf-card"
+                    style={{
+                      position: "absolute",
+                      right: 0,
+                      top: "calc(100% + 8px)",
+                      width: "min(340px, calc(100vw - 20px))",
+                      padding: "16px 14px",
+                      zIndex: 1200,
+                      boxShadow: "var(--shadow-lg)",
+                      color: "var(--ink)",
+                    }}
+                    onClick={e => e.stopPropagation()}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, borderBottom: "1px solid var(--line)", paddingBottom: 8 }}>
+                      <div style={{ fontWeight: 700, fontSize: 13.5, display: "flex", alignItems: "center", gap: 6, color: "var(--ink)" }}>
+                        <BellRing size={15} color="var(--rust)" />
+                        <span>Stock & Business Alerts</span>
+                      </div>
+                      <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>{totalAlertsCount} items</span>
+                    </div>
+
+                    {totalAlertsCount === 0 ? (
+                      <div style={{ textAlign: "center", padding: "18px 8px", color: "var(--green)", fontSize: 12.5 }}>
+                        <CheckCircle2 size={24} style={{ margin: "0 auto 6px" }} />
+                        <div>All stock levels healthy! No active alerts.</div>
+                      </div>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 250, overflowY: "auto" }}>
+                        {outOfStockItems.slice(0, 3).map(p => (
+                          <div
+                            key={p.id}
+                            onClick={() => {
+                              handleAlertRestock({ supplierId: p.supplierId, productId: p.id, qty: 1 });
+                              setShowAlertsFlyout(false);
+                            }}
+                            style={{ padding: "8px 10px", background: "var(--red-tint)", border: "1px solid var(--red)", borderRadius: 8, fontSize: 12, cursor: "pointer" }}
+                          >
+                            <div style={{ fontWeight: 700, color: "var(--red)" }}>🚨 Out of Stock: {p.name}</div>
+                            <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 2 }}>0 {p.baseUnit} in stock · Click to restock</div>
+                          </div>
+                        ))}
+                        {lowStockItems.slice(0, 2).map(p => (
+                          <div
+                            key={p.id}
+                            onClick={() => {
+                              handleAlertRestock({ supplierId: p.supplierId, productId: p.id, qty: 1 });
+                              setShowAlertsFlyout(false);
+                            }}
+                            style={{ padding: "8px 10px", background: "var(--amber-tint)", border: "1px solid var(--amber)", borderRadius: 8, fontSize: 12, cursor: "pointer" }}
+                          >
+                            <div style={{ fontWeight: 700, color: "var(--amber)" }}>⚠️ Low Stock: {p.name}</div>
+                            <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 2 }}>{p.stock} of {p.minStock} {p.baseUnit} remaining</div>
+                          </div>
+                        ))}
+                        {overdueCustomerDebts.slice(0, 2).map(c => (
+                          <div
+                            key={c.id}
+                            onClick={() => { setPage("customers"); setShowAlertsFlyout(false); }}
+                            style={{ padding: "8px 10px", background: "var(--surface-hover)", border: "1px solid var(--line)", borderRadius: 8, fontSize: 12, cursor: "pointer" }}
+                          >
+                            <div style={{ fontWeight: 700, color: "var(--ink)" }}>⏳ Overdue Debt: {c.name}</div>
+                            <div style={{ fontSize: 11, color: "var(--red)", marginTop: 2 }}>Owes {fmt(c.balance)} ({c.days} days inactive)</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <div style={{ borderTop: "1px solid var(--line)", marginTop: 10, paddingTop: 10 }}>
+                      <button
+                        type="button"
+                        className="hf-btn hf-btn-primary"
+                        style={{ width: "100%", justifyContent: "center", fontSize: 12, padding: "8px" }}
+                        onClick={() => { setPage("alerts"); setShowAlertsFlyout(false); }}
+                      >
+                        Open Alerts & Reorders Center <ArrowRight size={13} />
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Mobile PWA Install Prompt Button */}
@@ -5590,21 +5721,99 @@ export default function App() {
               </button>
             )}
 
+            {/* Mobile Theme Toggle Button */}
             <button
               type="button"
               onClick={toggleTheme}
-              style={{ background: "rgba(255,255,255,0.1)", border: "none", color: "#fff", padding: "6px 8px", borderRadius: 8, cursor: "pointer" }}
+              style={{ background: "rgba(255,255,255,0.1)", border: "none", color: "#fff", padding: "7px 9px", borderRadius: 8, cursor: "pointer", display: "flex", alignItems: "center" }}
               title="Toggle Theme"
             >
               {theme === "dark" ? <Sun size={15} color="#FBBF24" /> : <Moon size={15} color="#fff" />}
             </button>
-            <div
-              onClick={() => setUserDropdown(!userDropdown)}
-              style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", background: "rgba(255,255,255,0.12)", padding: "4px 8px", borderRadius: 8 }}
-            >
-              <div style={{ width: 22, height: 22, borderRadius: "50%", background: "var(--rust)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>
-                {currentUser.name.charAt(0)}
+
+            {/* Mobile User Profile Avatar & Dropdown */}
+            <div style={{ position: "relative" }}>
+              <div
+                onClick={() => {
+                  setUserDropdown(!userDropdown);
+                  setShowAlertsFlyout(false);
+                }}
+                style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", background: "rgba(255,255,255,0.12)", padding: "4px 8px", borderRadius: 8 }}
+                title="Account Menu"
+              >
+                <div style={{ width: 22, height: 22, borderRadius: "50%", background: "var(--rust)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>
+                  {currentUser.name.charAt(0)}
+                </div>
               </div>
+
+              {/* Mobile User Dropdown Menu */}
+              {userDropdown && (
+                <>
+                  <div
+                    style={{ position: "fixed", inset: 0, zIndex: 1100, background: "rgba(0,0,0,0.3)" }}
+                    onClick={() => setUserDropdown(false)}
+                  />
+                  <div
+                    className="hf-card"
+                    style={{
+                      position: "absolute",
+                      right: 0,
+                      top: "calc(100% + 8px)",
+                      width: 230,
+                      padding: 6,
+                      zIndex: 1200,
+                      boxShadow: "var(--shadow-lg)",
+                      color: "var(--ink)",
+                    }}
+                    onClick={() => setUserDropdown(false)}
+                  >
+                    <div style={{ padding: "8px 12px", borderBottom: "1px solid var(--line)", marginBottom: 4 }}>
+                      <div style={{ fontSize: 12.5, fontWeight: 700, color: "var(--ink)" }}>{currentUser.name}</div>
+                      <div style={{ fontSize: 11, color: "var(--ink-soft)", textTransform: "capitalize" }}>Role: {role}</div>
+                    </div>
+
+                    <div
+                      onClick={() => setShowProfile(true)}
+                      style={{ padding: "8px 12px", fontSize: 13, display: "flex", alignItems: "center", gap: 8, cursor: "pointer", borderRadius: 6, color: "var(--ink)" }}
+                    >
+                      <Key size={15} color="var(--ink-soft)" /> My Profile & Password
+                    </div>
+
+                    {role === "owner" && (
+                      <div
+                        onClick={() => setShowUserMgmt(true)}
+                        style={{ padding: "8px 12px", fontSize: 13, display: "flex", alignItems: "center", gap: 8, cursor: "pointer", borderRadius: 6, color: "var(--ink)" }}
+                      >
+                        <Users size={15} color="var(--ink-soft)" /> Staff & Accounts
+                      </div>
+                    )}
+
+                    {!isInstalled && (
+                      <div
+                        onClick={() => {
+                          if (isInstallable) {
+                            promptInstall();
+                          } else {
+                            notify("info", "Install HardwareFlow", "To install HardwareFlow on your phone, tap your browser's menu (⋮ or Share) and select 'Add to Home screen'.");
+                          }
+                        }}
+                        style={{ padding: "8px 12px", fontSize: 13, display: "flex", alignItems: "center", gap: 8, cursor: "pointer", borderRadius: 6, color: "var(--rust)", fontWeight: 600 }}
+                      >
+                        <Download size={15} color="var(--rust)" /> Install App
+                      </div>
+                    )}
+
+                    <div style={{ borderTop: "1px solid var(--line)", margin: "4px 0" }} />
+
+                    <div
+                      onClick={handleLogout}
+                      style={{ padding: "8px 12px", fontSize: 13, display: "flex", alignItems: "center", gap: 8, cursor: "pointer", borderRadius: 6, color: "var(--red)", fontWeight: 600 }}
+                    >
+                      <LogOut size={15} color="var(--red)" /> Sign Out
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -5627,7 +5836,10 @@ export default function App() {
             <div style={{ position: "relative" }}>
               <button
                 type="button"
-                onClick={() => setShowAlertsFlyout(!showAlertsFlyout)}
+                onClick={() => {
+                  setShowAlertsFlyout(!showAlertsFlyout);
+                  setUserDropdown(false);
+                }}
                 className="hf-btn hf-btn-ghost"
                 style={{
                   position: "relative",
@@ -5663,80 +5875,92 @@ export default function App() {
 
               {/* Alerts Quick Dropdown Flyout */}
               {showAlertsFlyout && (
-                <div
-                  className="hf-card"
-                  style={{
-                    position: "absolute",
-                    right: 0,
-                    top: "100%",
-                    marginTop: 8,
-                    width: 350,
-                    maxWidth: "92vw",
-                    padding: "16px 14px",
-                    zIndex: 1100,
-                    boxShadow: "var(--shadow-lg)",
-                  }}
-                  onClick={e => e.stopPropagation()}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, borderBottom: "1px solid var(--line)", paddingBottom: 8 }}>
-                    <div style={{ fontWeight: 700, fontSize: 13.5, display: "flex", alignItems: "center", gap: 6 }}>
-                      <BellRing size={15} color="var(--rust)" />
-                      <span>Stock & Business Alerts</span>
+                <>
+                  <div
+                    style={{ position: "fixed", inset: 0, zIndex: 1050 }}
+                    onClick={() => setShowAlertsFlyout(false)}
+                  />
+                  <div
+                    className="hf-card"
+                    style={{
+                      position: "absolute",
+                      right: 0,
+                      top: "100%",
+                      marginTop: 8,
+                      width: 350,
+                      maxWidth: "92vw",
+                      padding: "16px 14px",
+                      zIndex: 1100,
+                      boxShadow: "var(--shadow-lg)",
+                    }}
+                    onClick={e => e.stopPropagation()}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, borderBottom: "1px solid var(--line)", paddingBottom: 8 }}>
+                      <div style={{ fontWeight: 700, fontSize: 13.5, display: "flex", alignItems: "center", gap: 6 }}>
+                        <BellRing size={15} color="var(--rust)" />
+                        <span>Stock & Business Alerts</span>
+                      </div>
+                      <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>{totalAlertsCount} items</span>
                     </div>
-                    <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>{totalAlertsCount} items</span>
-                  </div>
 
-                  {totalAlertsCount === 0 ? (
-                    <div style={{ textAlign: "center", padding: "18px 8px", color: "var(--green)", fontSize: 12.5 }}>
-                      <CheckCircle2 size={24} style={{ margin: "0 auto 6px" }} />
-                      <div>All stock levels healthy! No active alerts.</div>
-                    </div>
-                  ) : (
-                    <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 250, overflowY: "auto" }}>
-                      {outOfStockItems.slice(0, 3).map(p => (
-                        <div
-                          key={p.id}
-                          onClick={() => handleAlertRestock({ supplierId: p.supplierId, productId: p.id, qty: 1 })}
-                          style={{ padding: "8px 10px", background: "var(--red-tint)", border: "1px solid var(--red)", borderRadius: 8, fontSize: 12, cursor: "pointer" }}
-                        >
-                          <div style={{ fontWeight: 700, color: "var(--red)" }}>🚨 Out of Stock: {p.name}</div>
-                          <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 2 }}>0 {p.baseUnit} in stock · Click to restock</div>
-                        </div>
-                      ))}
-                      {lowStockItems.slice(0, 2).map(p => (
-                        <div
-                          key={p.id}
-                          onClick={() => handleAlertRestock({ supplierId: p.supplierId, productId: p.id, qty: 1 })}
-                          style={{ padding: "8px 10px", background: "var(--amber-tint)", border: "1px solid var(--amber)", borderRadius: 8, fontSize: 12, cursor: "pointer" }}
-                        >
-                          <div style={{ fontWeight: 700, color: "var(--amber)" }}>⚠️ Low Stock: {p.name}</div>
-                          <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 2 }}>{p.stock} of {p.minStock} {p.baseUnit} remaining</div>
-                        </div>
-                      ))}
-                      {overdueCustomerDebts.slice(0, 2).map(c => (
-                        <div
-                          key={c.id}
-                          onClick={() => { setPage("customers"); setShowAlertsFlyout(false); }}
-                          style={{ padding: "8px 10px", background: "var(--surface-hover)", border: "1px solid var(--line)", borderRadius: 8, fontSize: 12, cursor: "pointer" }}
-                        >
-                          <div style={{ fontWeight: 700, color: "var(--ink)" }}>⏳ Overdue Debt: {c.name}</div>
-                          <div style={{ fontSize: 11, color: "var(--red)", marginTop: 2 }}>Owes {fmt(c.balance)} ({c.days} days inactive)</div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                    {totalAlertsCount === 0 ? (
+                      <div style={{ textAlign: "center", padding: "18px 8px", color: "var(--green)", fontSize: 12.5 }}>
+                        <CheckCircle2 size={24} style={{ margin: "0 auto 6px" }} />
+                        <div>All stock levels healthy! No active alerts.</div>
+                      </div>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 250, overflowY: "auto" }}>
+                        {outOfStockItems.slice(0, 3).map(p => (
+                          <div
+                            key={p.id}
+                            onClick={() => {
+                              handleAlertRestock({ supplierId: p.supplierId, productId: p.id, qty: 1 });
+                              setShowAlertsFlyout(false);
+                            }}
+                            style={{ padding: "8px 10px", background: "var(--red-tint)", border: "1px solid var(--red)", borderRadius: 8, fontSize: 12, cursor: "pointer" }}
+                          >
+                            <div style={{ fontWeight: 700, color: "var(--red)" }}>🚨 Out of Stock: {p.name}</div>
+                            <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 2 }}>0 {p.baseUnit} in stock · Click to restock</div>
+                          </div>
+                        ))}
+                        {lowStockItems.slice(0, 2).map(p => (
+                          <div
+                            key={p.id}
+                            onClick={() => {
+                              handleAlertRestock({ supplierId: p.supplierId, productId: p.id, qty: 1 });
+                              setShowAlertsFlyout(false);
+                            }}
+                            style={{ padding: "8px 10px", background: "var(--amber-tint)", border: "1px solid var(--amber)", borderRadius: 8, fontSize: 12, cursor: "pointer" }}
+                          >
+                            <div style={{ fontWeight: 700, color: "var(--amber)" }}>⚠️ Low Stock: {p.name}</div>
+                            <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 2 }}>{p.stock} of {p.minStock} {p.baseUnit} remaining</div>
+                          </div>
+                        ))}
+                        {overdueCustomerDebts.slice(0, 2).map(c => (
+                          <div
+                            key={c.id}
+                            onClick={() => { setPage("customers"); setShowAlertsFlyout(false); }}
+                            style={{ padding: "8px 10px", background: "var(--surface-hover)", border: "1px solid var(--line)", borderRadius: 8, fontSize: 12, cursor: "pointer" }}
+                          >
+                            <div style={{ fontWeight: 700, color: "var(--ink)" }}>⏳ Overdue Debt: {c.name}</div>
+                            <div style={{ fontSize: 11, color: "var(--red)", marginTop: 2 }}>Owes {fmt(c.balance)} ({c.days} days inactive)</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
 
-                  <div style={{ borderTop: "1px solid var(--line)", marginTop: 10, paddingTop: 10 }}>
-                    <button
-                      type="button"
-                      className="hf-btn hf-btn-primary"
-                      style={{ width: "100%", justifyContent: "center", fontSize: 12, padding: "8px" }}
-                      onClick={() => { setPage("alerts"); setShowAlertsFlyout(false); }}
-                    >
-                      Open Alerts & Reorders Center <ArrowRight size={13} />
-                    </button>
+                    <div style={{ borderTop: "1px solid var(--line)", marginTop: 10, paddingTop: 10 }}>
+                      <button
+                        type="button"
+                        className="hf-btn hf-btn-primary"
+                        style={{ width: "100%", justifyContent: "center", fontSize: 12, padding: "8px" }}
+                        onClick={() => { setPage("alerts"); setShowAlertsFlyout(false); }}
+                      >
+                        Open Alerts & Reorders Center <ArrowRight size={13} />
+                      </button>
+                    </div>
                   </div>
-                </div>
+                </>
               )}
             </div>
 
@@ -5766,7 +5990,10 @@ export default function App() {
             {/* User Account Menu */}
             <div style={{ position: "relative" }}>
               <div
-                onClick={() => setUserDropdown(!userDropdown)}
+                onClick={() => {
+                  setUserDropdown(!userDropdown);
+                  setShowAlertsFlyout(false);
+                }}
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -5796,69 +6023,75 @@ export default function App() {
 
               {/* Dropdown Menu */}
               {userDropdown && (
-                <div
-                  className="hf-card"
-                  style={{
-                    position: "absolute",
-                    right: 0,
-                    top: "100%",
-                    marginTop: 6,
-                    width: 230,
-                    padding: 6,
-                    zIndex: 1000,
-                    boxShadow: "var(--shadow-lg)",
-                  }}
-                  onClick={() => setUserDropdown(false)}
-                >
+                <>
                   <div
-                    onClick={() => setShowProfile(true)}
-                    style={{ padding: "8px 12px", fontSize: 13, display: "flex", alignItems: "center", gap: 8, cursor: "pointer", borderRadius: 6 }}
-                    onMouseEnter={e => e.currentTarget.style.background = "var(--surface-hover)"}
-                    onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                    style={{ position: "fixed", inset: 0, zIndex: 950 }}
+                    onClick={() => setUserDropdown(false)}
+                  />
+                  <div
+                    className="hf-card"
+                    style={{
+                      position: "absolute",
+                      right: 0,
+                      top: "100%",
+                      marginTop: 6,
+                      width: 230,
+                      padding: 6,
+                      zIndex: 1000,
+                      boxShadow: "var(--shadow-lg)",
+                    }}
+                    onClick={() => setUserDropdown(false)}
                   >
-                    <Key size={15} color="var(--ink-soft)" /> My Profile & Password
-                  </div>
-
-                  {role === "owner" && (
                     <div
-                      onClick={() => setShowUserMgmt(true)}
+                      onClick={() => setShowProfile(true)}
                       style={{ padding: "8px 12px", fontSize: 13, display: "flex", alignItems: "center", gap: 8, cursor: "pointer", borderRadius: 6 }}
                       onMouseEnter={e => e.currentTarget.style.background = "var(--surface-hover)"}
                       onMouseLeave={e => e.currentTarget.style.background = "transparent"}
                     >
-                      <Users size={15} color="var(--ink-soft)" /> Staff & Accounts
+                      <Key size={15} color="var(--ink-soft)" /> My Profile & Password
                     </div>
-                  )}
 
-                  {/* Install PWA Option */}
-                  {!isInstalled && (
+                    {role === "owner" && (
+                      <div
+                        onClick={() => setShowUserMgmt(true)}
+                        style={{ padding: "8px 12px", fontSize: 13, display: "flex", alignItems: "center", gap: 8, cursor: "pointer", borderRadius: 6 }}
+                        onMouseEnter={e => e.currentTarget.style.background = "var(--surface-hover)"}
+                        onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                      >
+                        <Users size={15} color="var(--ink-soft)" /> Staff & Accounts
+                      </div>
+                    )}
+
+                    {/* Install PWA Option */}
+                    {!isInstalled && (
+                      <div
+                        onClick={() => {
+                          if (isInstallable) {
+                            promptInstall();
+                          } else {
+                            notify("info", "Install HardwareFlow", "To install HardwareFlow on your phone or desktop, tap your browser's menu (⋮ or Share) and select 'Add to Home screen' or 'Install'.");
+                          }
+                        }}
+                        style={{ padding: "8px 12px", fontSize: 13, display: "flex", alignItems: "center", gap: 8, cursor: "pointer", borderRadius: 6, color: "var(--rust)", fontWeight: 600 }}
+                        onMouseEnter={e => e.currentTarget.style.background = "var(--rust-tint)"}
+                        onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                      >
+                        <Download size={15} color="var(--rust)" /> Install App / Shortcut
+                      </div>
+                    )}
+
+                    <div style={{ borderTop: "1px solid var(--line)", margin: "4px 0" }} />
+
                     <div
-                      onClick={() => {
-                        if (isInstallable) {
-                          promptInstall();
-                        } else {
-                          notify("info", "Install HardwareFlow", "To install HardwareFlow on your phone or desktop, tap your browser's menu (⋮ or Share) and select 'Add to Home screen' or 'Install'.");
-                        }
-                      }}
-                      style={{ padding: "8px 12px", fontSize: 13, display: "flex", alignItems: "center", gap: 8, cursor: "pointer", borderRadius: 6, color: "var(--rust)", fontWeight: 600 }}
-                      onMouseEnter={e => e.currentTarget.style.background = "var(--rust-tint)"}
+                      onClick={handleLogout}
+                      style={{ padding: "8px 12px", fontSize: 13, display: "flex", alignItems: "center", gap: 8, cursor: "pointer", borderRadius: 6, color: "var(--red)" }}
+                      onMouseEnter={e => e.currentTarget.style.background = "var(--red-tint)"}
                       onMouseLeave={e => e.currentTarget.style.background = "transparent"}
                     >
-                      <Download size={15} color="var(--rust)" /> Install App / Shortcut
+                      <LogOut size={15} color="var(--red)" /> Sign Out
                     </div>
-                  )}
-
-                  <div style={{ borderTop: "1px solid var(--line)", margin: "4px 0" }} />
-
-                  <div
-                    onClick={handleLogout}
-                    style={{ padding: "8px 12px", fontSize: 13, display: "flex", alignItems: "center", gap: 8, cursor: "pointer", borderRadius: 6, color: "var(--red)" }}
-                    onMouseEnter={e => e.currentTarget.style.background = "var(--red-tint)"}
-                    onMouseLeave={e => e.currentTarget.style.background = "transparent"}
-                  >
-                    <LogOut size={15} color="var(--red)" /> Sign Out
                   </div>
-                </div>
+                </>
               )}
             </div>
           </div>
