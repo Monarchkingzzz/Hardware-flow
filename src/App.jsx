@@ -1,11 +1,11 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, Component } from "react";
 import {
   LayoutDashboard, ShoppingCart, Package, Truck, Building2, Users, CreditCard,
   FileText, BookOpen, BarChart3, ShieldAlert, Lock, Search, Plus, X, Check,
   AlertTriangle, TrendingUp, TrendingDown, ChevronRight, Minus, Trash2,
   ArrowRight, Receipt as ReceiptIcon, Download, Eye, EyeOff, Calendar,
   Award, CheckCircle2, Sun, Moon,
-  LogOut, Key, Coins, Edit3, Menu, Wifi, WifiOff, RefreshCw,
+  LogOut, Key, Coins, Edit3, Menu, Wifi, WifiOff, RefreshCw, RotateCcw,
   Bell, BellRing, PhoneCall, Filter,
   FileSpreadsheet, History, SlidersHorizontal, ArrowDownRight, ArrowUpRight,
   FileDown, UploadCloud, CheckSquare, Info, ListFilter, Layers, Boxes, FileCheck
@@ -40,6 +40,49 @@ const STORAGE_KEY = "hardwareflow-db-v1";
 const AUTH_KEY = "hardwareflow-auth-session";
 const THEME_KEY = "hardwareflow-theme";
 const PAGE_KEY = "hardwareflow-active-page";
+
+class ErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error("[HardwareFlow ErrorBoundary] Caught UI render error:", error, errorInfo);
+  }
+
+  handleReset = () => {
+    this.setState({ hasError: false, error: null });
+    window.location.reload();
+  };
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: 28, maxWidth: 520, margin: "40px auto", textAlign: "center" }} className="hf-card">
+          <AlertTriangle size={36} color="var(--amber)" style={{ margin: "0 auto 12px" }} />
+          <div className="disp" style={{ fontSize: 20, fontWeight: 700, marginBottom: 6 }}>Something went wrong on this screen</div>
+          <div style={{ color: "var(--ink-soft)", fontSize: 13, marginBottom: 18 }}>
+            {this.state.error?.message || "An unexpected error occurred. Click below to reload this section."}
+          </div>
+          <button
+            type="button"
+            className="hf-btn hf-btn-primary"
+            style={{ margin: "0 auto", padding: "8px 18px" }}
+            onClick={this.handleReset}
+          >
+            <RefreshCw size={14} /> Reload HardwareFlow
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 function fmt(n) {
   const v = Math.round(Number(n) || 0);
@@ -9732,7 +9775,9 @@ export default function App() {
 
         {/* Content Wrap */}
         <div className="hf-main-content-wrap" style={{ padding: "24px 26px 60px", overflowY: "auto", flex: 1 }}>
-          {restricted ? <Locked label={currentNav?.label || "Page"} /> : pages[page]}
+          <ErrorBoundary key={page}>
+            {restricted ? <Locked label={currentNav?.label || "Page"} /> : pages[page]}
+          </ErrorBoundary>
         </div>
 
         {/* Mobile Bottom Navigation Bar */}
