@@ -53,7 +53,9 @@ create table if not exists public.products (
   created_at timestamptz default now()
 );
 
--- 4. CUSTOMERS & CREDIT ACCOUNTS
+-- 4. CUSTOMERS & CREDIT ACCOUNTS (STRICT ZERO-OVERPAYMENT & DEBT INTEGRITY)
+-- payments jsonb contains [{ date, time, amount, method, reference }]
+-- Business constraint: amount > 0, payments cannot exceed total credit sales balance
 create table if not exists public.customers (
   id text primary key,
   name text not null check (length(trim(name)) >= 1),

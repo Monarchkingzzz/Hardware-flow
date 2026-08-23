@@ -16,12 +16,15 @@ import {
   exportReportCenterPDF,
   exportReceiptPDF,
   exportBestSellersPDF,
-  exportReorderListPDF
+  exportReorderListPDF,
+  exportQuotationPDF,
+  exportQuotationsListPDF,
+  exportInvoicePDF
 } from "./utils/pdfExport";
 import { ToastContainer } from "./components/Toast";
 import { LoginScreen, ForgotPasswordModal, ProfileModal, UserManagementModal } from "./components/Auth";
 import { autoSyncDatabase, pullDatabaseFromSupabase, subscribeToSupabaseRealtime, getIsSyncing } from "./utils/supabaseClient";
-import { hashPassword, sanitizeUserForSession } from "./utils/security";
+import { hashPassword, sanitizeUserForSession, verifyActionPin, validateCustomerDebtRepayment, validateSupplierPayment } from "./utils/security";
 import { useOnlineStatus, enqueueOfflineSale, syncOfflineQueue } from "./utils/offlineSync";
 import { usePWAInstall } from "./utils/usePWAInstall";
 import { downloadExcelTemplate, downloadCSVTemplate, parseProductFile } from "./utils/excelImport";
@@ -278,6 +281,9 @@ function buildSeed() {
   ];
 
   const sales = [
+    { id: uid("INV"), invoiceNo: "INV-2026-00410", date: todayISO(-15), time: "09:00", items: [{ productId: "p1", qty: 200, unitPrice: 750, unitCost: 650 }], total: 150000, cost: 130000, profit: 20000, payment: "credit", customerId: "c1", employee: "John" },
+    { id: uid("INV"), invoiceNo: "INV-2026-00415", date: todayISO(-8), time: "10:30", items: [{ productId: "p2", qty: 400, unitPrice: 100, unitCost: 85 }], total: 40000, cost: 34000, profit: 6000, payment: "credit", customerId: "c2", employee: "John" },
+    { id: uid("INV"), invoiceNo: "INV-2026-00418", date: todayISO(-35), time: "11:00", items: [{ productId: "p5", qty: 30, unitPrice: 1400, unitCost: 1000 }], total: 42000, cost: 30000, profit: 12000, payment: "credit", customerId: "c3", employee: "John" },
     { id: uid("INV"), invoiceNo: "INV-2026-00448", date: todayISO(-2), time: "10:14", items: [{ productId: "p1", qty: 12, unitPrice: 780, unitCost: 650 }], total: 9360, cost: 7800, profit: 1560, payment: "cash", customerId: null, employee: "John" },
     { id: uid("INV"), invoiceNo: "INV-2026-00449", date: todayISO(-1), time: "14:30", items: [{ productId: "p2", qty: 15, unitPrice: 110, unitCost: 85 }], total: 1650, cost: 1275, profit: 375, payment: "mpesa", customerId: null, employee: "John" },
     { id: uid("INV"), invoiceNo: "INV-2026-00450", date: todayISO(0), time: "08:45", items: [{ productId: "p1", qty: 50, unitPrice: 750, unitCost: 650 }], total: 37500, cost: 32500, profit: 5000, payment: "credit", customerId: "c1", employee: "John" },
@@ -430,21 +436,18 @@ function useDB() {
             setDb(prevLocal => {
               if (!prevLocal) return cloudDb;
 
-              // Non-destructive merge: preserve any locally made sales/expenses/logs
+              // Non-destructive merge: preserve only unsynced offline items without resurrecting deleted items
               const cloudSaleInvoices = new Set((cloudDb.sales || []).map(s => s.invoiceNo || s.id));
-              const pendingLocalSales = (prevLocal.sales || []).filter(s => !cloudSaleInvoices.has(s.invoiceNo) && !cloudSaleInvoices.has(s.id));
+              const pendingLocalSales = (prevLocal.sales || []).filter(s => s.offline === true && !cloudSaleInvoices.has(s.invoiceNo) && !cloudSaleInvoices.has(s.id));
 
               const cloudExpIds = new Set((cloudDb.expenses || []).map(e => e.id));
-              const pendingLocalExpenses = (prevLocal.expenses || []).filter(e => !cloudExpIds.has(e.id));
-
-              const cloudLogIds = new Set((cloudDb.auditLog || []).map(l => l.id));
-              const pendingLocalLogs = (prevLocal.auditLog || []).filter(l => !cloudLogIds.has(l.id));
+              const pendingLocalExpenses = (prevLocal.expenses || []).filter(e => e.offline === true && !cloudExpIds.has(e.id));
 
               const merged = {
                 ...cloudDb,
                 sales: [...pendingLocalSales, ...(cloudDb.sales || [])],
                 expenses: [...pendingLocalExpenses, ...(cloudDb.expenses || [])],
-                auditLog: [...pendingLocalLogs, ...(cloudDb.auditLog || [])],
+                auditLog: cloudDb.auditLog || [],
                 invoiceSeq: Math.max(cloudDb.invoiceSeq || 0, prevLocal.invoiceSeq || 0),
                 quoteSeq: Math.max(cloudDb.quoteSeq || 0, prevLocal.quoteSeq || 0),
               };
@@ -918,6 +921,125 @@ function priceFor(product, tier) {
   if (tier === "contractor" && product.contractorPrice) return product.contractorPrice;
   if (tier === "wholesale" && product.wholesalePrice) return product.wholesalePrice;
   return product.sellPrice;
+}
+
+/* ================= STORE SECURITY & PIN VERIFICATION MODAL ================= */
+function PinVerificationModal({ isOpen, title, description, onSuccess, onCancel, db }) {
+  const [pin, setPin] = useState("");
+  const [showPin, setShowPin] = useState(false);
+  const [error, setError] = useState("");
+  const [isVerifying, setIsVerifying] = useState(false);
+
+  if (!isOpen) return null;
+
+  async function handleVerify(e) {
+    if (e) e.preventDefault();
+    setError("");
+    if (!pin.trim()) {
+      setError("Please enter the Store Security PIN.");
+      return;
+    }
+
+    setIsVerifying(true);
+    try {
+      const isValid = await verifyActionPin(pin.trim(), db);
+      if (isValid) {
+        setPin("");
+        setError("");
+        onSuccess();
+      } else {
+        setError("Incorrect Store Security PIN. Check with shop owner.");
+      }
+    } catch (err) {
+      console.error(err);
+      setError("Verification failed. Please try again.");
+    } finally {
+      setIsVerifying(false);
+    }
+  }
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(10,12,16,0.7)",
+        backdropFilter: "blur(2px)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 10000
+      }}
+      onClick={e => { e.stopPropagation(); onCancel(); }}
+    >
+      <div
+        className="hf-card"
+        style={{ width: 430, maxWidth: "92vw", padding: 22, boxShadow: "var(--shadow-lg)" }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div className="disp" style={{ fontSize: 18, fontWeight: 700, display: "flex", alignItems: "center", gap: 8, color: "var(--rust)" }}>
+            <Key size={18} /> {title || "Store PIN Verification"}
+          </div>
+          <button
+            type="button"
+            onClick={e => { e.stopPropagation(); onCancel(); }}
+            style={{ background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)" }}
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 14, lineHeight: 1.4 }}>
+          {description || "Enter the Master Store Security PIN to authorize this sensitive action."}
+        </div>
+
+        {error && (
+          <div style={{ background: "var(--red-tint)", color: "var(--red)", border: "1px solid var(--red)", padding: "7px 10px", borderRadius: 7, fontSize: 12, marginBottom: 12 }}>
+            {error}
+          </div>
+        )}
+
+        <form onSubmit={handleVerify}>
+          <div style={{ marginBottom: 14 }}>
+            <div className="hf-kpi-label" style={{ marginBottom: 4 }}>Enter Store Security PIN (4–6 digits)</div>
+            <div style={{ position: "relative" }}>
+              <input
+                className="hf-input mono hf-input-with-right-icon"
+                type={showPin ? "text" : "password"}
+                maxLength={6}
+                style={{ paddingRight: 40, fontSize: 16, textAlign: "center", letterSpacing: "0.25em" }}
+                placeholder="••••"
+                value={pin}
+                onClick={e => e.stopPropagation()}
+                onChange={e => { setPin(e.target.value.replace(/\D/g, "")); setError(""); }}
+                autoFocus
+              />
+              <button
+                type="button"
+                onClick={e => { e.stopPropagation(); setShowPin(!showPin); }}
+                style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)", padding: 4, display: "flex", alignItems: "center", justifyContent: "center" }}
+              >
+                {showPin ? <EyeOff size={15} /> : <Eye size={15} />}
+              </button>
+            </div>
+            <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 4, textAlign: "center" }}>
+              Default: 8888 (Created / changed by the Shop Owner)
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <button type="button" className="hf-btn hf-btn-ghost" onClick={e => { e.stopPropagation(); onCancel(); }}>
+              Cancel
+            </button>
+            <button type="submit" className="hf-btn hf-btn-primary" disabled={isVerifying || !pin}>
+              <Check size={14} /> {isVerifying ? "Verifying..." : "Authorize & Proceed"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
 }
 
 /* ================= DASHBOARD ================= */
@@ -1522,27 +1644,30 @@ function AlertRow({ tone, text, sub }) {
 
 /* ---------- derived helpers ---------- */
 function customerBalance(db, customerId) {
-  const sold = db.sales.filter(s => s.customerId === customerId && s.payment === "credit")
-    .reduce((a, s) => a + s.total, 0);
-  const cust = db.customers.find(c => c.id === customerId);
-  const paid = (cust?.payments || []).reduce((a, p) => a + p.amount, 0);
-  return Math.max(0, sold - paid);
+  const sold = (db?.sales || [])
+    .filter(s => s.customerId === customerId && s.payment === "credit")
+    .reduce((a, s) => a + Number(s.total || 0), 0);
+  const cust = (db?.customers || []).find(c => c.id === customerId);
+  const paid = (cust?.payments || []).reduce((a, p) => a + Number(p.amount || 0), 0);
+  return Math.max(0, Math.round(sold - paid));
 }
+
 function daysSinceLastActivity(db, customerId) {
-  const cust = db.customers.find(c => c.id === customerId);
+  const cust = (db?.customers || []).find(c => c.id === customerId);
   const dates = [
-    ...db.sales.filter(s => s.customerId === customerId).map(s => s.date),
+    ...(db?.sales || []).filter(s => s.customerId === customerId).map(s => s.date),
     ...(cust?.payments || []).map(p => p.date),
   ];
   if (dates.length === 0) return 999;
   const latest = dates.sort().slice(-1)[0];
   return Math.round((new Date(todayISO(0)) - new Date(latest)) / 86400000);
 }
+
 function supplierOutstanding(db, supplierId) {
   let total = 0;
-  (db.products || []).filter(p => p.supplierId === supplierId).forEach(p => {
+  (db?.products || []).filter(p => p.supplierId === supplierId).forEach(p => {
     (p.history || []).forEach(h => {
-      if (h.action === "Received") {
+      if (h.action === "Received" || h.action === "Receive Stock") {
         const factor = Number(p.conversionFactor) > 0 ? Number(p.conversionFactor) : 1;
         const unitCost = Number(p.buyPrice) > 0 ? (Number(p.buyPrice) / factor) : 0;
         total += (Number(h.qty) || 0) * unitCost;
@@ -1550,12 +1675,12 @@ function supplierOutstanding(db, supplierId) {
     });
   });
 
-  const supplier = (db.suppliers || []).find(s => s.id === supplierId);
+  const supplier = (db?.suppliers || []).find(s => s.id === supplierId);
   const paidFromSupplier = (supplier?.payments || []).reduce((a, x) => a + (Number(x.amount) || 0), 0);
 
   // Also include any payments in expenses that were recorded for this supplier
   const linkedExpenseIds = new Set((supplier?.payments || []).map(p => p.expenseId || p.id).filter(Boolean));
-  const paidFromExpenses = (db.expenses || [])
+  const paidFromExpenses = (db?.expenses || [])
     .filter(e => e.category === "Supplier Payment" && e.supplierId === supplierId && !linkedExpenseIds.has(e.id))
     .reduce((a, e) => a + (Number(e.amount) || 0), 0);
 
@@ -1565,9 +1690,9 @@ function supplierOutstanding(db, supplierId) {
 
 function supplierTotalPurchases(db, supplierId) {
   let total = 0;
-  (db.products || []).filter(p => p.supplierId === supplierId).forEach(p => {
+  (db?.products || []).filter(p => p.supplierId === supplierId).forEach(p => {
     (p.history || []).forEach(h => {
-      if (h.action === "Received") {
+      if (h.action === "Received" || h.action === "Receive Stock") {
         const factor = Number(p.conversionFactor) > 0 ? Number(p.conversionFactor) : 1;
         const unitCost = Number(p.buyPrice) > 0 ? (Number(p.buyPrice) / factor) : 0;
         total += (Number(h.qty) || 0) * unitCost;
@@ -1583,10 +1708,22 @@ function POS({ db, setDb, role, notify, currentUser }) {
   const [query, setQuery] = useState("");
   const [tier, setTier] = useState("retail");
   const [cart, setCart] = useState([]);
-  const [payment, setPayment] = useState("cash");
+  const [payment, setPayment] = useState("cash"); // "cash" | "mpesa" | "bank" | "credit" | "split"
   const [customerId, setCustomerId] = useState("");
   const [splitCash, setSplitCash] = useState(0);
   const [receiptSale, setReceiptSale] = useState(null);
+
+  // Custom / Auto Invoice # state
+  const [useCustomInvoice, setUseCustomInvoice] = useState(false);
+  const [customInvoiceNo, setCustomInvoiceNo] = useState("");
+
+  // Store PIN Verification Modal for Deletions
+  const [pinModal, setPinModal] = useState({
+    isOpen: false,
+    title: "",
+    description: "",
+    onSuccess: () => {},
+  });
 
   // Offline Sync State
   const { isOnline, queuedCount, refreshQueueCount } = useOnlineStatus();
@@ -1731,8 +1868,15 @@ function POS({ db, setDb, role, notify, currentUser }) {
       notify("error", "Insufficient Stock — Checkout Blocked", `Cannot complete sale. The following item(s) exceed available inventory: ${summary}. Please reduce quantity or receive stock.`);
       return;
     }
+    if (payment === "split") {
+      const splitNum = Number(splitCash);
+      if (isNaN(splitNum) || splitNum <= 0 || splitNum >= total) {
+        notify("error", "Invalid Split Payment Amount", `Cash portion must be greater than KSh 0 and less than total sale amount (${fmt(total)}). No transaction recorded.`);
+        return;
+      }
+    }
     if (payment === "credit" && !customerId) {
-      notify("error", "Customer Required", "Please select a registered customer for credit sales.");
+      notify("error", "Customer Required", "Please select a registered customer for credit sales. No transaction recorded.");
       return;
     }
     if (payment === "credit" && custAvailable !== null && total > custAvailable) {
@@ -1748,7 +1892,11 @@ function POS({ db, setDb, role, notify, currentUser }) {
       return m ? parseInt(m[0], 10) : 0;
     });
     const nextSeqNum = Math.max(457, ...existingInvSeqs, Number(db.invoiceSeq) || 0) + 1;
-    const invoiceNo = `INV-2026-${String(nextSeqNum).padStart(5, "0")}`;
+    
+    let resolvedInvoiceNo = `INV-2026-${String(nextSeqNum).padStart(5, "0")}`;
+    if (useCustomInvoice && customInvoiceNo.trim()) {
+      resolvedInvoiceNo = customInvoiceNo.trim().toUpperCase();
+    }
     const saleDate = todayISO(0);
 
     const saleItems = lines.map(l => ({
@@ -1759,11 +1907,11 @@ function POS({ db, setDb, role, notify, currentUser }) {
     }));
     const cost = saleItems.reduce((a, i) => a + i.unitCost * i.qty, 0);
     const profit = total - cost;
-    const employee = currentUser?.name || (role === "owner" ? "Owner" : "John");
+    const employee = currentUser?.name || (role === "owner" ? "Owner" : "Cashier");
 
     const sale = {
       id: uid("INV"),
-      invoiceNo,
+      invoiceNo: resolvedInvoiceNo,
       date: saleDate,
       time: timeStr,
       items: saleItems,
@@ -1777,7 +1925,7 @@ function POS({ db, setDb, role, notify, currentUser }) {
       offline: !navigator.onLine,
     };
 
-    // Instant local stock reduction & persistence (0ms latency for Kenyan retail counters)
+    // Instant local stock reduction & persistence
     setDb(prev => {
       const products = prev.products.map(p => {
         const line = saleItems.find(i => i.productId === p.id);
@@ -1793,7 +1941,7 @@ function POS({ db, setDb, role, notify, currentUser }) {
               date: sale.date,
               time: timeStr,
               action: "Sale",
-              ref: invoiceNo,
+              ref: resolvedInvoiceNo,
               qty: -line.qty,
               balance: newStock,
               user: sale.employee,
@@ -1821,9 +1969,9 @@ function POS({ db, setDb, role, notify, currentUser }) {
             user: sale.employee,
             role: role === "owner" ? "Owner" : "Cashier",
             category: payment === "credit" ? "Credit Sale" : "Sale",
-            action: `Sold ${saleItems.map(i=>i.qty).reduce((a,b)=>a+b,0)} item(s) — ${invoiceNo}`,
+            action: `Sold ${saleItems.map(i=>i.qty).reduce((a,b)=>a+b,0)} item(s) — ${resolvedInvoiceNo}`,
             detail: `${fmt(total)} via ${payment.toUpperCase()}${!navigator.onLine ? " (Offline)" : ""}`,
-            target: invoiceNo,
+            target: resolvedInvoiceNo,
           },
           ...prev.auditLog
         ],
@@ -1832,15 +1980,155 @@ function POS({ db, setDb, role, notify, currentUser }) {
 
     if (!navigator.onLine) {
       enqueueOfflineSale(sale);
-      notify("info", "Sale Saved Locally (Offline Mode)", `${invoiceNo} recorded instantly. Receipt generated & queued for cloud sync.`);
+      notify("info", "Sale Saved Locally (Offline Mode)", `${resolvedInvoiceNo} recorded instantly. Receipt generated & queued for cloud sync.`);
     } else {
-      notify("success", "Sale Completed Successfully", `${invoiceNo} · Total: ${fmt(total)} (${payment.toUpperCase()})`);
+      notify("success", "Sale Completed Successfully", `${resolvedInvoiceNo} · Total: ${fmt(total)} (${payment.toUpperCase()})`);
     }
 
     setReceiptSale(sale);
     setCart([]);
     setCustomerId("");
     setPayment("cash");
+    setCustomInvoiceNo("");
+    setUseCustomInvoice(false);
+  }
+
+  /* ---------- Delete Individual Sale (With PIN Verification & Stock Restoral) ---------- */
+  function handleDeleteSale(saleToDelete) {
+    setPinModal({
+      isOpen: true,
+      title: "Authorize Sale Deletion",
+      description: `Enter Store Security PIN to remove invoice ${saleToDelete.invoiceNo} (${fmt(saleToDelete.total)}) and return all sold items back to inventory stock.`,
+      onSuccess: () => {
+        const timeStr = new Date().toTimeString().slice(0, 5);
+        const today = todayISO(0);
+        const operator = currentUser?.name || "Staff";
+
+        setDb(prev => {
+          // Restore items back to inventory stock and append ledger entries
+          const products = prev.products.map(p => {
+            const line = (saleToDelete.items || []).find(i => i.productId === p.id);
+            if (!line) return p;
+            const restoredStock = (Number(p.stock) || 0) + line.qty;
+            return {
+              ...p,
+              stock: restoredStock,
+              history: [
+                ...(p.history || []),
+                {
+                  id: uid("H"),
+                  date: today,
+                  time: timeStr,
+                  action: "Sale Deleted (Restock)",
+                  ref: saleToDelete.invoiceNo,
+                  qty: line.qty,
+                  balance: restoredStock,
+                  user: operator,
+                  reason: `Sale ${saleToDelete.invoiceNo} deleted — Items returned to shelf`,
+                }
+              ]
+            };
+          });
+
+          const updatedSales = (prev.sales || []).filter(s => s.id !== saleToDelete.id && s.invoiceNo !== saleToDelete.invoiceNo);
+
+          const auditEntry = {
+            id: uid("LOG"),
+            time: `${today} ${timeStr}`,
+            user: operator,
+            role: currentUser?.role || "Staff",
+            category: "Sale Deletion",
+            action: `Deleted sale invoice ${saleToDelete.invoiceNo} (${fmt(saleToDelete.total)})`,
+            detail: `Restored stock for ${(saleToDelete.items || []).length} item(s) — Verified via Store PIN`,
+            target: saleToDelete.invoiceNo,
+          };
+
+          return {
+            ...prev,
+            products,
+            sales: updatedSales,
+            auditLog: [auditEntry, ...(prev.auditLog || [])],
+          };
+        });
+
+        notify("success", "Sale Deleted & Stock Restored", `Invoice ${saleToDelete.invoiceNo} was removed and inventory levels were restocked.`);
+        setPinModal({ isOpen: false, title: "", description: "", onSuccess: () => {} });
+      }
+    });
+  }
+
+  /* ---------- Delete / Clear All Sales History (With PIN Verification & Stock Restoral) ---------- */
+  function handleClearAllSales() {
+    if ((db.sales || []).length === 0) {
+      notify("info", "No Sales Found", "Sales history is already empty.");
+      return;
+    }
+
+    setPinModal({
+      isOpen: true,
+      title: "Authorize Clear All Sales History",
+      description: `WARNING: Enter Store Security PIN to permanently delete all ${db.sales.length} sales records. All items will be restored to store inventory.`,
+      onSuccess: () => {
+        const timeStr = new Date().toTimeString().slice(0, 5);
+        const today = todayISO(0);
+        const operator = currentUser?.name || "Staff";
+
+        setDb(prev => {
+          // Accumulate restock quantities for all products
+          const restockMap = {};
+          (prev.sales || []).forEach(s => {
+            (s.items || []).forEach(it => {
+              restockMap[it.productId] = (restockMap[it.productId] || 0) + Number(it.qty || 0);
+            });
+          });
+
+          const products = prev.products.map(p => {
+            const addQty = restockMap[p.id] || 0;
+            if (addQty === 0) return p;
+            const newStock = (Number(p.stock) || 0) + addQty;
+            return {
+              ...p,
+              stock: newStock,
+              history: [
+                ...(p.history || []),
+                {
+                  id: uid("H"),
+                  date: today,
+                  time: timeStr,
+                  action: "Sale Deleted (Restock)",
+                  ref: "BULK-CLEAR",
+                  qty: addQty,
+                  balance: newStock,
+                  user: operator,
+                  reason: `Bulk sales history cleared — Restocked ${addQty} ${p.baseUnit}`,
+                }
+              ]
+            };
+          });
+
+          const auditEntry = {
+            id: uid("LOG"),
+            time: `${today} ${timeStr}`,
+            user: operator,
+            role: currentUser?.role || "Staff",
+            category: "Bulk Sale Deletion",
+            action: `Cleared all sales history (${(prev.sales || []).length} sales)`,
+            detail: `All inventory quantities restored to shelves — Verified via Store PIN`,
+            target: "All Sales History",
+          };
+
+          return {
+            ...prev,
+            products,
+            sales: [],
+            auditLog: [auditEntry, ...(prev.auditLog || [])],
+          };
+        });
+
+        notify("success", "All Sales Cleared", "All sales history records have been deleted and store inventory restocked.");
+        setPinModal({ isOpen: false, title: "", description: "", onSuccess: () => {} });
+      }
+    });
   }
 
   const filteredSales = useMemo(() => {
@@ -1853,9 +2141,9 @@ function POS({ db, setDb, role, notify, currentUser }) {
 
       const cust = db.customers.find(c => c.id === s.customerId);
       const custName = cust?.name?.toLowerCase() || "";
-      const invMatch = s.invoiceNo.toLowerCase().includes(q);
+      const invMatch = (s.invoiceNo || "").toLowerCase().includes(q);
       const empMatch = (s.employee || "").toLowerCase().includes(q);
-      const itemMatch = s.items.some(it => {
+      const itemMatch = (s.items || []).some(it => {
         const prod = db.products.find(p => p.id === it.productId);
         return prod?.name?.toLowerCase().includes(q) || prod?.sku?.toLowerCase().includes(q);
       });
@@ -1872,6 +2160,16 @@ function POS({ db, setDb, role, notify, currentUser }) {
 
   return (
     <div>
+      {/* Universal Store Security PIN Verification Modal */}
+      <PinVerificationModal
+        isOpen={pinModal.isOpen}
+        title={pinModal.title}
+        description={pinModal.description}
+        onSuccess={pinModal.onSuccess}
+        onCancel={() => setPinModal({ isOpen: false, title: "", description: "", onSuccess: () => {} })}
+        db={db}
+      />
+
       {/* POS Top Bar: Tabs & Live Connectivity Status */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
         <div style={{ display: "flex", gap: 8, background: "var(--line)", padding: 3, borderRadius: 10 }}>
@@ -1897,7 +2195,7 @@ function POS({ db, setDb, role, notify, currentUser }) {
               boxShadow: activeTab === "history" ? "var(--shadow-sm)" : "none",
             }}
           >
-            <Calendar size={15} /> Sales History & Period Search
+            <Calendar size={15} /> Sales History & Receipts
           </button>
         </div>
 
@@ -2241,12 +2539,14 @@ function POS({ db, setDb, role, notify, currentUser }) {
               )}
             </div>
 
-            <div style={{ marginBottom: 14 }}>
+            {/* Payment Method with Bank option */}
+            <div style={{ marginBottom: 12 }}>
               <div className="hf-kpi-label" style={{ marginBottom: 4 }}>Payment Method</div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
                 {[
                   { key: "cash", label: "Cash" },
                   { key: "mpesa", label: "M-Pesa" },
+                  { key: "bank", label: "Bank / Transfer" },
                   { key: "credit", label: "Credit" },
                   { key: "split", label: "Cash + M-Pesa" },
                 ].map(m => {
@@ -2263,7 +2563,8 @@ function POS({ db, setDb, role, notify, currentUser }) {
                         border: isSelected ? "1.5px solid var(--rust-dark)" : "1.5px solid var(--line)",
                         boxShadow: isSelected ? "0 2px 8px rgba(193,80,47,0.35)" : "none",
                         fontWeight: isSelected ? 700 : 500,
-                        fontSize: 12.5,
+                        fontSize: 12,
+                        gridColumn: m.key === "split" ? "span 2" : "span 1"
                       }}
                     >
                       {isSelected ? "✓ " : ""}{m.label}
@@ -2290,6 +2591,33 @@ function POS({ db, setDb, role, notify, currentUser }) {
                     <span>M-Pesa portion:</span>
                     <span className="mono" style={{ fontWeight: 700 }}>{fmt(total - Math.min(splitCash, total))}</span>
                   </div>
+                </div>
+              )}
+            </div>
+
+            {/* Custom or Auto Invoice Number Toggle & Input */}
+            <div style={{ marginBottom: 14, background: "var(--surface-hover)", border: "1px solid var(--line)", padding: 10, borderRadius: 8 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                <div className="hf-kpi-label">Invoice Number</div>
+                <button
+                  type="button"
+                  onClick={() => setUseCustomInvoice(!useCustomInvoice)}
+                  style={{ background: "none", border: "none", color: "var(--rust)", fontSize: 11, fontWeight: 700, cursor: "pointer", padding: 0 }}
+                >
+                  {useCustomInvoice ? "Use Auto Number" : "+ Write Custom Invoice #"}
+                </button>
+              </div>
+              {useCustomInvoice ? (
+                <input
+                  className="hf-input mono"
+                  style={{ marginTop: 4 }}
+                  placeholder="e.g. INV-2026-99 or Book #14"
+                  value={customInvoiceNo}
+                  onChange={e => setCustomInvoiceNo(e.target.value)}
+                />
+              ) : (
+                <div className="mono" style={{ fontSize: 12, color: "var(--ink-soft)" }}>
+                  Auto generated: INV-2026-XXXXX
                 </div>
               )}
             </div>
@@ -2322,8 +2650,21 @@ function POS({ db, setDb, role, notify, currentUser }) {
       ) : (
         /* SALES HISTORY & PERIOD SEARCH */
         <div>
-          <div className="disp" style={{ fontSize: 26, fontWeight: 700, marginBottom: 12 }}>
-            Sales History & Period Search
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
+            <div>
+              <div className="disp" style={{ fontSize: 26, fontWeight: 700 }}>Sales History & Invoices</div>
+              <div style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>Track, review, print receipts/invoices, or delete sales with Store PIN authorization.</div>
+            </div>
+
+            <button
+              type="button"
+              className="hf-btn hf-btn-ghost"
+              style={{ color: "var(--red)", borderColor: "var(--red)" }}
+              onClick={handleClearAllSales}
+              title="Delete all sales records (Protected by PIN)"
+            >
+              <Trash2 size={14} /> Clear All Sales History
+            </button>
           </div>
 
           <div className="hf-card" style={{ padding: 16, marginBottom: 16 }}>
@@ -2352,6 +2693,7 @@ function POS({ db, setDb, role, notify, currentUser }) {
                   <option value="all">All payment methods</option>
                   <option value="cash">Cash only</option>
                   <option value="mpesa">M-Pesa only</option>
+                  <option value="bank">Bank / Transfer only</option>
                   <option value="credit">Credit only</option>
                   <option value="split">Split payment</option>
                 </select>
@@ -2426,7 +2768,7 @@ function POS({ db, setDb, role, notify, currentUser }) {
             )}
           </div>
 
-          <div className="hf-card">
+          <div className="hf-card" style={{ overflowX: "auto" }}>
             <table className="hf-table">
               <thead>
                 <tr>
@@ -2438,14 +2780,14 @@ function POS({ db, setDb, role, notify, currentUser }) {
                   <th style={{ textAlign: "right" }}>Total Amount</th>
                   {role === "owner" && <th style={{ textAlign: "right" }}>Profit</th>}
                   <th>Cashier</th>
-                  <th style={{ width: 140 }}>Receipt Actions</th>
+                  <th style={{ width: 220, textAlign: "right" }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredSales.map(s => {
                   const cust = db.customers.find(c => c.id === s.customerId);
-                  const itemCount = s.items.reduce((a, b) => a + b.qty, 0);
-                  const summaryStr = s.items.map(it => {
+                  const itemCount = (s.items || []).reduce((a, b) => a + (Number(b.qty) || 0), 0);
+                  const summaryStr = (s.items || []).map(it => {
                     const prod = db.products.find(p => p.id === it.productId);
                     return `${it.qty} × ${prod?.name || "Item"}`;
                   }).join(", ");
@@ -2462,8 +2804,8 @@ function POS({ db, setDb, role, notify, currentUser }) {
                         <span style={{ fontWeight: 600 }}>{itemCount} pcs</span> · {summaryStr}
                       </td>
                       <td>
-                        <Pill tone={s.payment === "mpesa" ? "green" : s.payment === "credit" ? "amber" : "steel"}>
-                          {s.payment === "mpesa" ? "M-Pesa" : s.payment.toUpperCase()}
+                        <Pill tone={s.payment === "mpesa" ? "green" : s.payment === "credit" ? "amber" : s.payment === "bank" ? "purple" : "steel"}>
+                          {s.payment === "mpesa" ? "M-Pesa" : s.payment === "bank" ? "Bank Transfer" : s.payment.toUpperCase()}
                         </Pill>
                       </td>
                       <td className="mono text-profit" style={{ textAlign: "right", fontWeight: 700 }}>{fmt(s.total)}</td>
@@ -2471,11 +2813,11 @@ function POS({ db, setDb, role, notify, currentUser }) {
                         <td className="mono text-profit" style={{ textAlign: "right" }}>{fmt(s.profit)}</td>
                       )}
                       <td>{s.employee}</td>
-                      <td>
-                        <div style={{ display: "flex", gap: 4 }}>
+                      <td style={{ textAlign: "right" }}>
+                        <div style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
                           <button
                             className="hf-btn hf-btn-ghost"
-                            style={{ padding: "4px 8px", fontSize: 11.5 }}
+                            style={{ padding: "4px 7px", fontSize: 11 }}
                             onClick={() => setReceiptSale(s)}
                             title="View receipt modal"
                           >
@@ -2483,14 +2825,33 @@ function POS({ db, setDb, role, notify, currentUser }) {
                           </button>
                           <button
                             className="hf-btn hf-btn-ghost"
-                            style={{ padding: "4px 8px", fontSize: 11.5 }}
+                            style={{ padding: "4px 7px", fontSize: 11 }}
                             onClick={() => {
                               exportReceiptPDF({ sale: s, db });
                               notify("success", "Receipt Downloaded", `Receipt for ${s.invoiceNo} downloaded.`);
                             }}
-                            title="Download official PDF sales receipt"
+                            title="Download PDF sales receipt"
                           >
-                            <Download size={12} /> PDF
+                            <Download size={12} /> Receipt
+                          </button>
+                          <button
+                            className="hf-btn hf-btn-ghost"
+                            style={{ padding: "4px 7px", fontSize: 11, color: "var(--rust)" }}
+                            onClick={() => {
+                              exportInvoicePDF({ sale: s, db });
+                              notify("success", "Tax Invoice Downloaded", `Invoice for ${s.invoiceNo} downloaded.`);
+                            }}
+                            title="Download Commercial Supply / Tax Invoice"
+                          >
+                            <FileText size={12} /> Invoice
+                          </button>
+                          <button
+                            className="hf-btn hf-btn-ghost"
+                            style={{ padding: "4px 6px", fontSize: 11, color: "var(--red)" }}
+                            onClick={() => handleDeleteSale(s)}
+                            title="Delete sale and restore stock (Requires PIN)"
+                          >
+                            <Trash2 size={12} />
                           </button>
                         </div>
                       </td>
@@ -2516,13 +2877,18 @@ function POS({ db, setDb, role, notify, currentUser }) {
 function ReceiptView({ sale, db, onClose, notify }) {
   const cust = db.customers.find(c => c.id === sale.customerId);
 
-  function handleDownloadPDF() {
+  function handleDownloadReceipt() {
     exportReceiptPDF({ sale, db });
     notify("success", "PDF Receipt Downloaded", `Receipt for ${sale.invoiceNo} saved.`);
   }
 
+  function handleDownloadInvoice() {
+    exportInvoicePDF({ sale, db });
+    notify("success", "Supply Invoice Downloaded", `Tax Invoice for ${sale.invoiceNo} saved.`);
+  }
+
   return (
-    <div style={{ maxWidth: 440, margin: "20px auto" }}>
+    <div style={{ maxWidth: 460, margin: "20px auto" }}>
       <div className="hf-card" style={{ padding: 24 }}>
         <div style={{ textAlign: "center", marginBottom: 14 }}>
           <div className="disp" style={{ fontSize: 24, fontWeight: 700 }}>HARDWAREFLOW</div>
@@ -2549,21 +2915,31 @@ function ReceiptView({ sale, db, onClose, notify }) {
           <span className="mono text-profit">{fmt(sale.total)}</span>
         </div>
         <div style={{ fontSize: 12, color: "var(--ink-soft)" }}>
-          Paid via {sale.payment === "mpesa" ? "M-Pesa" : sale.payment.toUpperCase()} · Served by {sale.employee}
+          Paid via {sale.payment === "mpesa" ? "M-Pesa" : sale.payment === "bank" ? "Bank Transfer" : sale.payment.toUpperCase()} · Served by {sale.employee}
         </div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 12 }}>
         <button
           className="hf-btn hf-btn-primary"
-          style={{ justifyContent: "center" }}
-          onClick={handleDownloadPDF}
+          style={{ justifyContent: "center", fontSize: 12.5 }}
+          onClick={handleDownloadReceipt}
         >
-          <Download size={15} /> Download PDF Receipt
+          <Download size={14} /> Receipt PDF
         </button>
         <button
+          className="hf-btn hf-btn-ghost"
+          style={{ justifyContent: "center", fontSize: 12.5, color: "var(--rust)" }}
+          onClick={handleDownloadInvoice}
+        >
+          <FileText size={14} /> Supply Invoice PDF
+        </button>
+      </div>
+
+      <div style={{ marginTop: 8 }}>
+        <button
           className="hf-btn hf-btn-dark"
-          style={{ justifyContent: "center" }}
+          style={{ width: "100%", justifyContent: "center" }}
           onClick={onClose}
         >
           New Sale / Close
@@ -4177,18 +4553,18 @@ function Receiving({ db, setDb, notify, currentUser, prefill, onClearPrefill }) 
         };
       });
 
-      // If paid directly (cash or mpesa), log as an immediate stock purchase expense
+      // If paid directly (cash, mpesa, or bank), log as an immediate stock purchase expense
       let updatedExpenses = prev.expenses;
       let updatedSuppliers = prev.suppliers;
 
-      if (paymentMode === "cash" || paymentMode === "mpesa") {
+      if (paymentMode === "cash" || paymentMode === "mpesa" || paymentMode === "bank") {
         const expEntry = {
           id: uid("EXP"),
           date: today,
           category: "Stock Purchase",
           amount: total,
           description: `Stock delivery from ${supp?.name || "Supplier"} (${invoiceRef || poNumber})`,
-          payment: paymentMode,
+          payment: paymentMode === "bank" ? "other" : paymentMode,
           supplierId: supp?.id || null,
         };
         updatedExpenses = [expEntry, ...prev.expenses];
@@ -4197,7 +4573,7 @@ function Receiving({ db, setDb, notify, currentUser, prefill, onClearPrefill }) 
         if (supp) {
           updatedSuppliers = prev.suppliers.map(s => s.id === supp.id ? {
             ...s,
-            payments: [...(s.payments || []), { date: today, amount: total }]
+            payments: [...(s.payments || []), { date: today, amount: total, method: paymentMode }]
           } : s);
         }
       }
@@ -4232,9 +4608,9 @@ function Receiving({ db, setDb, notify, currentUser, prefill, onClearPrefill }) 
     return (
       <div className="hf-card" style={{ padding: 32, maxWidth: 440, margin: "40px auto", textAlign: "center" }}>
         <CheckCircle2 size={32} color="var(--green)" style={{ margin: "0 auto" }} />
-        <div className="disp" style={{ fontSize: 22, fontWeight: 700, marginTop: 10 }}>Stock Delivery Received</div>
+        <div className="disp" style={{ fontSize: 22, fontWeight: 700, marginTop: 12 }}>Delivery Processed</div>
         <div style={{ color: "var(--ink-soft)", fontSize: 13, marginTop: 4 }}>
-          Inventory stock levels, purchase histories, and supplier account have been updated in real-time.
+          Inventory levels and cost records updated.
         </div>
         <button
           className="hf-btn hf-btn-primary"
@@ -4248,28 +4624,32 @@ function Receiving({ db, setDb, notify, currentUser, prefill, onClearPrefill }) 
   }
 
   return (
-    <div style={{ maxWidth: 720 }}>
-      <div className="disp" style={{ fontSize: 26, fontWeight: 700, marginBottom: 14 }}>Receive Stock Delivery</div>
-      <div className="hf-card" style={{ padding: 18 }}>
-        <FieldGrid>
-          <Field label="Supplier">
+    <div>
+      <div className="disp" style={{ fontSize: 26, fontWeight: 700, marginBottom: 4 }}>Receive Stock Delivery</div>
+      <div style={{ color: "var(--ink-soft)", fontSize: 13, marginBottom: 14 }}>
+        Log incoming stock shipments from suppliers and automatically update on-hand quantities & buying costs.
+      </div>
+      <div className="hf-card" style={{ maxWidth: 660, padding: 22 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+          <Field label="Supplier *">
             <select className="hf-input" value={supplierId} onChange={e => setSupplierId(e.target.value)}>
               {db.suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
           </Field>
-          <Field label="Supplier Delivery Note / Invoice #">
-            <input className="hf-input" placeholder="e.g. INV-1045" value={invoiceRef} onChange={e => setInvoiceRef(e.target.value)} />
+          <Field label="Supplier Invoice / Delivery Note # (Optional)">
+            <input className="hf-input" placeholder="e.g. BAM-INV-9921" value={invoiceRef} onChange={e => setInvoiceRef(e.target.value)} />
           </Field>
-        </FieldGrid>
+        </div>
 
         {/* Payment Terms for Delivery */}
         <div style={{ marginTop: 12, marginBottom: 6 }}>
           <div className="hf-kpi-label" style={{ marginBottom: 4 }}>Payment for Delivery</div>
-          <div style={{ display: "flex", gap: 6 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 6 }}>
             {[
-              { key: "credit", label: "On Credit (Supplier Account)" },
-              { key: "cash", label: "Paid Cash on Delivery" },
-              { key: "mpesa", label: "Paid via M-Pesa" },
+              { key: "credit", label: "On Credit" },
+              { key: "cash", label: "Paid Cash" },
+              { key: "mpesa", label: "Paid M-Pesa" },
+              { key: "bank", label: "Paid via Bank" },
             ].map(m => {
               const isSelected = paymentMode === m.key;
               return (
@@ -4279,7 +4659,6 @@ function Receiving({ db, setDb, notify, currentUser, prefill, onClearPrefill }) 
                   onClick={() => setPaymentMode(m.key)}
                   className="hf-btn"
                   style={{
-                    flex: 1,
                     justifyContent: "center",
                     background: isSelected ? "var(--rust)" : "var(--surface-hover)",
                     color: isSelected ? "#FFFFFF" : "var(--ink)",
@@ -4328,6 +4707,12 @@ function Receiving({ db, setDb, notify, currentUser, prefill, onClearPrefill }) 
 function Suppliers({ db, setDb, notify, currentUser }) {
   const [selected, setSelected] = useState(null);
   const [creating, setCreating] = useState(false);
+  const [pinModal, setPinModal] = useState({
+    isOpen: false,
+    title: "",
+    description: "",
+    onSuccess: () => {},
+  });
 
   const suppliersWithBal = (db.suppliers || []).map(s => {
     const totalPurchases = supplierTotalPurchases(db, s.id);
@@ -4354,6 +4739,12 @@ function Suppliers({ db, setDb, notify, currentUser }) {
   const totalAllOutstanding = suppliersWithBal.reduce((a, s) => a + s.outstanding, 0);
 
   function recordPayment(supplierId, amount, paymentMethod = "mpesa", reference = "") {
+    const valCheck = validateSupplierPayment(db, supplierId, amount);
+    if (!valCheck.valid) {
+      notify("error", "Payment Blocked", valCheck.reason);
+      return;
+    }
+
     const supp = (db.suppliers || []).find(s => s.id === supplierId);
     const today = todayISO(0);
     const timeStr = new Date().toTimeString().slice(0, 5);
@@ -4411,7 +4802,7 @@ function Suppliers({ db, setDb, notify, currentUser }) {
     const supp = (db.suppliers || []).find(s => s.id === supplierId);
     const bal = supplierOutstanding(db, supplierId);
     if (bal <= 0) {
-      notify("info", "Balance Already Zero", `${supp?.name || 'Supplier'} has no outstanding debt.`);
+      notify("error", "Balance Already Settled", `${supp?.name || 'Supplier'} has zero outstanding payables. No settlement payment is needed.`);
       return;
     }
 
@@ -4458,6 +4849,88 @@ function Suppliers({ db, setDb, notify, currentUser }) {
     notify("warning", "Payment Undone", `Removed payment of ${fmt(targetPayment.amount)}. Supplier balance updated.`);
   }
 
+  /* ---------- Delete Individual Supplier with Store PIN ---------- */
+  function handleDeleteSupplier(suppId) {
+    const target = (db.suppliers || []).find(s => s.id === suppId);
+    if (!target) return;
+
+    setPinModal({
+      isOpen: true,
+      title: "Authorize Supplier Removal",
+      description: `Enter Store Security PIN to permanently remove supplier "${target.name}". Associated products will have their supplier link unassigned.`,
+      onSuccess: () => {
+        const today = todayISO(0);
+        const timeStr = new Date().toTimeString().slice(0, 5);
+        const operator = currentUser?.name || "Owner";
+
+        setDb(prev => ({
+          ...prev,
+          suppliers: (prev.suppliers || []).filter(s => s.id !== suppId),
+          products: (prev.products || []).map(p => p.supplierId === suppId ? { ...p, supplierId: null } : p),
+          auditLog: [
+            {
+              id: uid("LOG"),
+              time: `${today} ${timeStr}`,
+              user: operator,
+              role: currentUser?.role || "Owner",
+              category: "Supplier Deleted",
+              action: `Deleted supplier: ${target.name}`,
+              detail: `Supplier account removed — Verified via Store PIN`,
+              target: target.name,
+            },
+            ...(prev.auditLog || [])
+          ]
+        }));
+
+        notify("success", "Supplier Removed", `Supplier "${target.name}" has been deleted.`);
+        setSelected(null);
+        setPinModal({ isOpen: false, title: "", description: "", onSuccess: () => {} });
+      }
+    });
+  }
+
+  /* ---------- Clear All Suppliers with Store PIN ---------- */
+  function handleClearAllSuppliers() {
+    if ((db.suppliers || []).length === 0) {
+      notify("info", "No Suppliers Found", "Supplier list is already empty.");
+      return;
+    }
+
+    setPinModal({
+      isOpen: true,
+      title: "Authorize Clear All Suppliers",
+      description: `WARNING: Enter Store Security PIN to permanently delete all ${db.suppliers.length} supplier accounts.`,
+      onSuccess: () => {
+        const today = todayISO(0);
+        const timeStr = new Date().toTimeString().slice(0, 5);
+        const operator = currentUser?.name || "Owner";
+
+        setDb(prev => ({
+          ...prev,
+          suppliers: [],
+          products: (prev.products || []).map(p => ({ ...p, supplierId: null })),
+          auditLog: [
+            {
+              id: uid("LOG"),
+              time: `${today} ${timeStr}`,
+              user: operator,
+              role: currentUser?.role || "Owner",
+              category: "Bulk Supplier Deletion",
+              action: `Cleared all suppliers (${(prev.suppliers || []).length} accounts)`,
+              detail: `All suppliers removed — Verified via Store PIN`,
+              target: "All Suppliers",
+            },
+            ...(prev.auditLog || [])
+          ]
+        }));
+
+        notify("success", "All Suppliers Cleared", "All supplier records have been deleted.");
+        setSelected(null);
+        setPinModal({ isOpen: false, title: "", description: "", onSuccess: () => {} });
+      }
+    });
+  }
+
   function handleSaveNewSupplier(newSupp) {
     setDb(prev => ({
       ...prev,
@@ -4482,6 +4955,15 @@ function Suppliers({ db, setDb, notify, currentUser }) {
 
   return (
     <div>
+      <PinVerificationModal
+        isOpen={pinModal.isOpen}
+        title={pinModal.title}
+        description={pinModal.description}
+        onSuccess={pinModal.onSuccess}
+        onCancel={() => setPinModal({ isOpen: false, title: "", description: "", onSuccess: () => {} })}
+        db={db}
+      />
+
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
         <div>
           <div className="disp" style={{ fontSize: 26, fontWeight: 700 }}>Suppliers & Payables</div>
@@ -4489,9 +4971,20 @@ function Suppliers({ db, setDb, notify, currentUser }) {
             Manage supplier accounts, track stock deliveries, and settle debts with automated expense recording.
           </div>
         </div>
-        <button className="hf-btn hf-btn-primary" onClick={() => setCreating(true)}>
-          <Plus size={15} /> Add Supplier
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            type="button"
+            className="hf-btn hf-btn-ghost"
+            style={{ color: "var(--red)", borderColor: "var(--red)" }}
+            onClick={handleClearAllSuppliers}
+            title="Delete all supplier accounts (Requires PIN)"
+          >
+            <Trash2 size={14} /> Clear All Suppliers
+          </button>
+          <button className="hf-btn hf-btn-primary" onClick={() => setCreating(true)}>
+            <Plus size={15} /> Add Supplier
+          </button>
+        </div>
       </div>
 
       {/* Top Overview KPI Cards */}
@@ -4527,7 +5020,7 @@ function Suppliers({ db, setDb, notify, currentUser }) {
               <th>Total Paid</th>
               <th>Outstanding Balance</th>
               <th>Status</th>
-              <th></th>
+              <th style={{ width: 80, textAlign: "right" }}></th>
             </tr>
           </thead>
           <tbody>
@@ -4550,8 +5043,19 @@ function Suppliers({ db, setDb, notify, currentUser }) {
                       {isDue ? "BALANCE DUE" : "SETTLED"}
                     </Pill>
                   </td>
-                  <td>
-                    <ChevronRight size={15} color="var(--ink-soft)" />
+                  <td style={{ textAlign: "right" }} onClick={e => e.stopPropagation()}>
+                    <div style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
+                      <button
+                        type="button"
+                        className="hf-btn hf-btn-ghost"
+                        style={{ padding: "4px 6px", color: "var(--red)" }}
+                        onClick={() => handleDeleteSupplier(s.id)}
+                        title="Delete supplier (Requires PIN)"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                      <ChevronRight size={15} color="var(--ink-soft)" />
+                    </div>
                   </td>
                 </tr>
               );
@@ -4583,9 +5087,20 @@ function Suppliers({ db, setDb, notify, currentUser }) {
                   <div style={{ fontWeight: 700, fontSize: 15 }}>{s.name}</div>
                   <div style={{ fontSize: 12, color: "var(--ink-soft)" }}>{s.phone || "No phone"} · {s.terms}</div>
                 </div>
-                <Pill tone={isDue ? "red" : "green"}>
-                  {isDue ? "DUE" : "SETTLED"}
-                </Pill>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <Pill tone={isDue ? "red" : "green"}>
+                    {isDue ? "DUE" : "SETTLED"}
+                  </Pill>
+                  <button
+                    type="button"
+                    className="hf-btn hf-btn-ghost"
+                    style={{ padding: "4px", color: "var(--red)" }}
+                    onClick={e => { e.stopPropagation(); handleDeleteSupplier(s.id); }}
+                    title="Delete supplier"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 8, paddingTop: 8, borderTop: "1px solid var(--line)" }}>
                 <div>
@@ -4612,6 +5127,7 @@ function Suppliers({ db, setDb, notify, currentUser }) {
           onPay={recordPayment}
           onClearBalance={clearBalance}
           onDeletePayment={deletePayment}
+          onDeleteSupplier={handleDeleteSupplier}
           onClose={() => setSelected(null)}
           notify={notify}
         />
@@ -4629,7 +5145,7 @@ function Suppliers({ db, setDb, notify, currentUser }) {
   );
 }
 
-function SupplierDrawer({ supplier, db, onPay, onClearBalance, onDeletePayment, onClose, notify }) {
+function SupplierDrawer({ supplier, db, onPay, onClearBalance, onDeletePayment, onDeleteSupplier, onClose, notify }) {
   const [amount, setAmount] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("mpesa"); // "mpesa" | "cash" | "bank"
   const [reference, setReference] = useState("");
@@ -4653,8 +5169,9 @@ function SupplierDrawer({ supplier, db, onPay, onClearBalance, onDeletePayment, 
 
   function handlePay() {
     const val = Number(amount);
-    if (isNaN(val) || val <= 0) {
-      notify("error", "Invalid Amount", "Please enter a valid payment amount.");
+    const valCheck = validateSupplierPayment(db, supplier.id, val);
+    if (!valCheck.valid) {
+      notify("error", "Payment Blocked", valCheck.reason);
       return;
     }
     onPay(supplier.id, val, paymentMethod, reference);
@@ -4664,7 +5181,7 @@ function SupplierDrawer({ supplier, db, onPay, onClearBalance, onDeletePayment, 
 
   function handleQuickPayFull() {
     if (supplier.outstanding <= 0) {
-      notify("info", "Settled", "This supplier has no outstanding balance.");
+      notify("error", "Supplier Settled", "This supplier has zero outstanding payables. No payment is required.");
       return;
     }
     setAmount(String(supplier.outstanding));
@@ -4739,63 +5256,78 @@ function SupplierDrawer({ supplier, db, onPay, onClearBalance, onDeletePayment, 
         )}
 
         {/* Record Payment Form Box */}
-        <div style={{ background: "var(--surface-hover)", border: "1.5px solid var(--line)", padding: "16px 14px", borderRadius: 12, marginBottom: 20 }}>
-          <div className="hf-kpi-label" style={{ marginBottom: 6, fontWeight: 700 }}>Record Payment to Supplier</div>
-          <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 12 }}>
-            Payments directly deduct from the supplier's outstanding balance and automatically reflect in your daily Cashbook & Expenses.
+        {supplier.outstanding <= 0 ? (
+          <div style={{ background: "rgba(46, 125, 50, 0.08)", border: "1.5px solid rgba(46, 125, 50, 0.25)", borderRadius: 12, padding: "16px 14px", marginBottom: 20, textAlign: "center" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, color: "var(--green)", fontWeight: 700, fontSize: 14, marginBottom: 2 }}>
+              <CheckCircle2 size={16} /> All Payables Fully Settled
+            </div>
+            <div style={{ fontSize: 12, color: "var(--ink-soft)" }}>
+              {supplier.name} has zero outstanding debt balance (KSh 0). Payments cannot be recorded.
+            </div>
           </div>
+        ) : (
+          <div style={{ background: "var(--surface-hover)", border: "1.5px solid var(--line)", padding: "16px 14px", borderRadius: 12, marginBottom: 20 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <div className="hf-kpi-label" style={{ fontWeight: 700 }}>Record Payment to Supplier</div>
+              <span style={{ fontSize: 11, color: "var(--rust)", fontWeight: 600 }}>Max: {fmt(supplier.outstanding)}</span>
+            </div>
+            <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 12 }}>
+              Payments directly deduct from the supplier's outstanding balance and automatically reflect in your daily Cashbook & Expenses.
+            </div>
 
-          <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
-            {[
-              { key: "mpesa", label: "M-Pesa" },
-              { key: "cash", label: "Cash" },
-              { key: "bank", label: "Bank Transfer" },
-            ].map(m => (
+            <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+              {[
+                { key: "mpesa", label: "M-Pesa" },
+                { key: "cash", label: "Cash" },
+                { key: "bank", label: "Bank Transfer" },
+              ].map(m => (
+                <button
+                  key={m.key}
+                  type="button"
+                  className="hf-btn"
+                  style={{
+                    flex: 1,
+                    justifyContent: "center",
+                    fontSize: 12,
+                    padding: "6px 8px",
+                    background: paymentMethod === m.key ? "var(--rust)" : "var(--surface)",
+                    color: paymentMethod === m.key ? "#fff" : "var(--ink)",
+                    border: paymentMethod === m.key ? "1.5px solid var(--rust-dark)" : "1.5px solid var(--line)",
+                  }}
+                  onClick={() => setPaymentMethod(m.key)}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <input
+                className="hf-input"
+                type="number"
+                max={supplier.outstanding}
+                placeholder={`Amount to pay (Max: ${fmt(supplier.outstanding)})`}
+                value={amount}
+                onChange={e => setAmount(e.target.value)}
+              />
+              <input
+                className="hf-input"
+                placeholder="Reference / Notes (optional, e.g. BANK-TRF-9921)"
+                value={reference}
+                onChange={e => setReference(e.target.value)}
+              />
               <button
-                key={m.key}
                 type="button"
-                className="hf-btn"
-                style={{
-                  flex: 1,
-                  justifyContent: "center",
-                  fontSize: 12,
-                  padding: "6px 8px",
-                  background: paymentMethod === m.key ? "var(--rust)" : "var(--surface)",
-                  color: paymentMethod === m.key ? "#fff" : "var(--ink)",
-                  border: paymentMethod === m.key ? "1.5px solid var(--rust-dark)" : "1.5px solid var(--line)",
-                }}
-                onClick={() => setPaymentMethod(m.key)}
+                className="hf-btn hf-btn-primary"
+                style={{ width: "100%", justifyContent: "center", padding: "10px", marginTop: 4 }}
+                onClick={handlePay}
+                disabled={!amount || Number(amount) <= 0}
               >
-                {m.label}
+                Confirm & Deduct Balance
               </button>
-            ))}
+            </div>
           </div>
-
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <input
-              className="hf-input"
-              type="number"
-              placeholder="Amount to pay (KSh)"
-              value={amount}
-              onChange={e => setAmount(e.target.value)}
-            />
-            <input
-              className="hf-input"
-              placeholder="Reference / Notes (optional, e.g. MPESA-QW9281)"
-              value={reference}
-              onChange={e => setReference(e.target.value)}
-            />
-            <button
-              type="button"
-              className="hf-btn hf-btn-primary"
-              style={{ width: "100%", justifyContent: "center", padding: "10px", marginTop: 4 }}
-              onClick={handlePay}
-              disabled={!amount || Number(amount) <= 0}
-            >
-              Confirm & Deduct Balance
-            </button>
-          </div>
-        </div>
+        )}
 
         {/* Supplier Purchase History & Deliveries */}
         <div style={{ marginBottom: 22 }}>
@@ -4923,7 +5455,7 @@ function SupplierDrawer({ supplier, db, onPay, onClearBalance, onDeletePayment, 
         </div>
 
         {/* Products Supplied */}
-        <div>
+        <div style={{ marginBottom: 20 }}>
           <div className="disp" style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>Products Supplied ({products.length})</div>
           {products.map(p => (
             <div key={p.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "6px 0", borderBottom: "1px solid var(--line)" }}>
@@ -4934,6 +5466,19 @@ function SupplierDrawer({ supplier, db, onPay, onClearBalance, onDeletePayment, 
           {products.length === 0 && (
             <div style={{ color: "var(--ink-soft)", fontSize: 12.5 }}>No catalog items linked to this supplier yet.</div>
           )}
+        </div>
+
+        {/* Delete Supplier Action */}
+        <div style={{ marginTop: "auto", borderTop: "1px solid var(--line)", paddingTop: 14, display: "flex", justifyContent: "flex-end" }}>
+          <button
+            type="button"
+            className="hf-btn hf-btn-ghost"
+            style={{ color: "var(--red)", borderColor: "var(--red-tint)", fontSize: 12.5 }}
+            onClick={() => onDeleteSupplier(supplier.id)}
+            title="Permanently remove this supplier (Requires PIN)"
+          >
+            <Trash2 size={13} /> Delete Supplier Account
+          </button>
         </div>
       </div>
     </div>
@@ -5002,24 +5547,38 @@ function NewSupplierModal({ onCancel, onSave, notify }) {
 /* ================= CUSTOMERS & CREDIT ================= */
 function Customers({ db, setDb, notify, currentUser }) {
   const [selected, setSelected] = useState(null);
-  const withBal = db.customers.map(c => ({
+  const [creating, setCreating] = useState(false);
+  const [pinModal, setPinModal] = useState({
+    isOpen: false,
+    title: "",
+    description: "",
+    onSuccess: () => {},
+  });
+
+  const withBal = (db.customers || []).map(c => ({
     ...c,
     balance: customerBalance(db, c.id),
     days: daysSinceLastActivity(db, c.id)
   }));
   const active = selected ? withBal.find(c => c.id === selected) : null;
 
-  function recordPayment(customerId, amount) {
-    const cust = db.customers.find(c => c.id === customerId);
+  function recordPayment(customerId, amount, method = "cash", reference = "") {
+    const valCheck = validateCustomerDebtRepayment(db, customerId, amount);
+    if (!valCheck.valid) {
+      notify("error", "Payment Blocked", valCheck.reason);
+      return;
+    }
+
+    const cust = (db.customers || []).find(c => c.id === customerId);
     const today = todayISO(0);
     const timeStr = new Date().toTimeString().slice(0, 5);
     const operator = currentUser?.name || "Owner";
 
     setDb(prev => ({
       ...prev,
-      customers: prev.customers.map(c => c.id === customerId ? {
+      customers: (prev.customers || []).map(c => c.id === customerId ? {
         ...c,
-        payments: [...(c.payments || []), { date: today, amount: Number(amount) }]
+        payments: [...(c.payments || []), { date: today, time: timeStr, amount: Number(amount), method, reference: reference.trim() }]
       } : c),
       auditLog: [
         {
@@ -5029,10 +5588,10 @@ function Customers({ db, setDb, notify, currentUser }) {
           role: currentUser?.role || "Staff",
           category: "Customer Payment",
           action: `Received debt payment from ${cust?.name}`,
-          detail: fmt(amount),
+          detail: `${fmt(amount)} via ${method.toUpperCase()}${reference.trim() ? ` (${reference.trim()})` : ""}`,
           target: cust?.name,
         },
-        ...prev.auditLog
+        ...(prev.auditLog || [])
       ],
     }));
 
@@ -5046,14 +5605,145 @@ function Customers({ db, setDb, notify, currentUser }) {
     return { tone: "green", label: "Active" };
   }
 
+  /* ---------- Delete Individual Customer with PIN ---------- */
+  function handleDeleteCustomer(custId) {
+    const target = (db.customers || []).find(c => c.id === custId);
+    if (!target) return;
+
+    setPinModal({
+      isOpen: true,
+      title: "Authorize Customer Removal",
+      description: `Enter Store Security PIN to permanently delete customer account "${target.name}". Any existing sales will remain in sales history.`,
+      onSuccess: () => {
+        const today = todayISO(0);
+        const timeStr = new Date().toTimeString().slice(0, 5);
+        const operator = currentUser?.name || "Owner";
+
+        setDb(prev => ({
+          ...prev,
+          customers: (prev.customers || []).filter(c => c.id !== custId),
+          auditLog: [
+            {
+              id: uid("LOG"),
+              time: `${today} ${timeStr}`,
+              user: operator,
+              role: currentUser?.role || "Owner",
+              category: "Customer Deleted",
+              action: `Deleted customer account: ${target.name}`,
+              detail: `Customer deleted — Verified via Store PIN`,
+              target: target.name,
+            },
+            ...(prev.auditLog || [])
+          ]
+        }));
+
+        notify("success", "Customer Removed", `Customer "${target.name}" has been deleted.`);
+        setSelected(null);
+        setPinModal({ isOpen: false, title: "", description: "", onSuccess: () => {} });
+      }
+    });
+  }
+
+  /* ---------- Clear All Customers with PIN ---------- */
+  function handleClearAllCustomers() {
+    if ((db.customers || []).length === 0) {
+      notify("info", "No Customers Found", "Customer list is already empty.");
+      return;
+    }
+
+    setPinModal({
+      isOpen: true,
+      title: "Authorize Clear All Customers",
+      description: `WARNING: Enter Store Security PIN to permanently delete all ${db.customers.length} registered customer accounts.`,
+      onSuccess: () => {
+        const today = todayISO(0);
+        const timeStr = new Date().toTimeString().slice(0, 5);
+        const operator = currentUser?.name || "Owner";
+
+        setDb(prev => ({
+          ...prev,
+          customers: [],
+          auditLog: [
+            {
+              id: uid("LOG"),
+              time: `${today} ${timeStr}`,
+              user: operator,
+              role: currentUser?.role || "Owner",
+              category: "Bulk Customer Deletion",
+              action: `Cleared all customer accounts (${(prev.customers || []).length} accounts)`,
+              detail: `All customer profiles removed — Verified via Store PIN`,
+              target: "All Customers",
+            },
+            ...(prev.auditLog || [])
+          ]
+        }));
+
+        notify("success", "All Customers Cleared", "All customer records have been deleted.");
+        setSelected(null);
+        setPinModal({ isOpen: false, title: "", description: "", onSuccess: () => {} });
+      }
+    });
+  }
+
+  function handleSaveNewCustomer(newCust) {
+    setDb(prev => ({
+      ...prev,
+      customers: [newCust, ...(prev.customers || [])],
+      auditLog: [
+        {
+          id: uid("LOG"),
+          time: `${todayISO(0)} ${new Date().toTimeString().slice(0, 5)}`,
+          user: currentUser?.name || "Owner",
+          role: currentUser?.role || "Owner",
+          category: "Customer Created",
+          action: `Registered new customer: ${newCust.name}`,
+          detail: `Credit limit: ${fmt(newCust.creditLimit)}, Phone: ${newCust.phone || "N/A"}`,
+          target: newCust.name,
+        },
+        ...(prev.auditLog || [])
+      ]
+    }));
+    notify("success", "Customer Added", `Registered ${newCust.name} successfully.`);
+    setCreating(false);
+  }
+
   const totalDebt = withBal.reduce((a, c) => a + c.balance, 0);
 
   return (
     <div>
-      <div className="disp" style={{ fontSize: 26, fontWeight: 700, marginBottom: 4 }}>Customers & Credit</div>
-      <div style={{ color: "var(--ink-soft)", fontSize: 13, marginBottom: 14 }}>
-        Total customer debt: <span className="mono text-loss" style={{ fontWeight: 700, fontSize: 15 }}>{fmt(totalDebt)}</span>
+      <PinVerificationModal
+        isOpen={pinModal.isOpen}
+        title={pinModal.title}
+        description={pinModal.description}
+        onSuccess={pinModal.onSuccess}
+        onCancel={() => setPinModal({ isOpen: false, title: "", description: "", onSuccess: () => {} })}
+        db={db}
+      />
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <div className="disp" style={{ fontSize: 26, fontWeight: 700, marginBottom: 2 }}>Customers & Credit</div>
+          <div style={{ color: "var(--ink-soft)", fontSize: 13 }}>
+            Total customer debt: <span className="mono text-loss" style={{ fontWeight: 700, fontSize: 15 }}>{fmt(totalDebt)}</span>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            type="button"
+            className="hf-btn hf-btn-ghost"
+            style={{ color: "var(--red)", borderColor: "var(--red)" }}
+            onClick={handleClearAllCustomers}
+            title="Delete all customer accounts (Requires PIN)"
+          >
+            <Trash2 size={14} /> Clear All Customers
+          </button>
+          <button className="hf-btn hf-btn-primary" onClick={() => setCreating(true)}>
+            <Plus size={15} /> Add Customer
+          </button>
+        </div>
       </div>
+
       <div className="hf-card">
         <table className="hf-table">
           <thead>
@@ -5063,7 +5753,7 @@ function Customers({ db, setDb, notify, currentUser }) {
               <th>Current Balance</th>
               <th>Available Credit</th>
               <th>Status</th>
-              <th></th>
+              <th style={{ width: 80, textAlign: "right" }}></th>
             </tr>
           </thead>
           <tbody>
@@ -5078,37 +5768,82 @@ function Customers({ db, setDb, notify, currentUser }) {
                   </td>
                   <td className="mono">{fmt(c.creditLimit - c.balance)}</td>
                   <td><Pill tone={st.tone}>{st.label}</Pill></td>
-                  <td><ChevronRight size={15} color="var(--ink-soft)" /></td>
+                  <td style={{ textAlign: "right" }} onClick={e => e.stopPropagation()}>
+                    <div style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
+                      <button
+                        type="button"
+                        className="hf-btn hf-btn-ghost"
+                        style={{ padding: "4px 6px", color: "var(--red)" }}
+                        onClick={() => handleDeleteCustomer(c.id)}
+                        title="Delete customer (Requires PIN)"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                      <ChevronRight size={15} color="var(--ink-soft)" />
+                    </div>
+                  </td>
                 </tr>
               );
             })}
+            {withBal.length === 0 && (
+              <tr>
+                <td colSpan={6} style={{ textAlign: "center", padding: 28, color: "var(--ink-soft)" }}>
+                  No customers registered yet. Click "Add Customer" above.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
-      {active && <CustomerDrawer customer={active} db={db} onPay={recordPayment} onClose={() => setSelected(null)} notify={notify} />}
+
+      {active && (
+        <CustomerDrawer
+          customer={active}
+          db={db}
+          onPay={recordPayment}
+          onDeleteCustomer={handleDeleteCustomer}
+          onClose={() => setSelected(null)}
+          notify={notify}
+        />
+      )}
+
+      {creating && (
+        <NewCustomerModal
+          onCancel={() => setCreating(false)}
+          onSave={handleSaveNewCustomer}
+          notify={notify}
+        />
+      )}
     </div>
   );
 }
 
-function CustomerDrawer({ customer, db, onPay, onClose, notify }) {
+function CustomerDrawer({ customer, db, onPay, onDeleteCustomer, onClose, notify }) {
   const [amount, setAmount] = useState("");
-  const sales = db.sales.filter(s => s.customerId === customer.id);
+  const [paymentMethod, setPaymentMethod] = useState("cash"); // "cash" | "mpesa" | "bank"
+  const [reference, setReference] = useState("");
+  const sales = (db.sales || []).filter(s => s.customerId === customer.id);
 
   function handlePay() {
     const val = Number(amount);
-    if (isNaN(val) || val <= 0) {
-      notify("error", "Invalid Amount", "Please enter a valid amount.");
+    const valCheck = validateCustomerDebtRepayment(db, customer.id, val);
+    if (!valCheck.valid) {
+      notify("error", "Payment Blocked", valCheck.reason);
       return;
     }
-    onPay(customer.id, val);
+    onPay(customer.id, val, paymentMethod, reference);
     setAmount("");
+    setReference("");
   }
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(20,24,30,0.5)", display: "flex", justifyContent: "flex-end", zIndex: 50 }} onClick={onClose}>
-      <div className="hf-card" style={{ width: 440, maxWidth: "92vw", height: "100%", borderRadius: 0, overflowY: "auto", padding: 24 }} onClick={e => e.stopPropagation()}>
+    <div style={{ position: "fixed", inset: 0, background: "rgba(20,24,30,0.5)", display: "flex", justifyContent: "flex-end", zIndex: 1100 }} onClick={onClose}>
+      <div className="hf-card" style={{ width: 460, maxWidth: "94vw", height: "100%", borderRadius: 0, overflowY: "auto", padding: 24, display: "flex", flexDirection: "column" }} onClick={e => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
-          <div className="disp" style={{ fontSize: 22, fontWeight: 700 }}>{customer.name}</div>
+          <div>
+            <div className="disp" style={{ fontSize: 22, fontWeight: 700 }}>{customer.name}</div>
+            <div style={{ fontSize: 12, color: "var(--ink-soft)" }}>{customer.phone || "No phone"}</div>
+          </div>
           <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer" }}><X size={18} /></button>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 18 }}>
@@ -5117,21 +5852,153 @@ function CustomerDrawer({ customer, db, onPay, onClose, notify }) {
           <Stat label="Available Credit" value={fmt(customer.creditLimit - customer.balance)} />
           <Stat label="Total Purchases" value={fmt(sales.reduce((a,s)=>a+s.total,0))} />
         </div>
-        <div style={{ background: "var(--surface-hover)", padding: 12, borderRadius: 10, marginBottom: 18 }}>
-          <div className="hf-kpi-label" style={{ marginBottom: 6 }}>Record Payment Received</div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <input className="hf-input" type="number" placeholder="Payment received (KSh)" value={amount} onChange={e => setAmount(e.target.value)} />
-            <button className="hf-btn hf-btn-primary" onClick={handlePay}>Record</button>
+
+        {/* Record Payment Form */}
+        {customer.balance <= 0 ? (
+          <div style={{ background: "rgba(46, 125, 50, 0.08)", border: "1.5px solid rgba(46, 125, 50, 0.25)", borderRadius: 10, padding: "16px 14px", marginBottom: 18, textAlign: "center" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, color: "var(--green)", fontWeight: 700, fontSize: 14, marginBottom: 2 }}>
+              <CheckCircle2 size={16} /> Debt Balance Fully Settled
+            </div>
+            <div style={{ fontSize: 12, color: "var(--ink-soft)" }}>
+              {customer.name} has zero outstanding debt balance (KSh 0). Repayment is not permitted.
+            </div>
           </div>
-        </div>
+        ) : (
+          <div style={{ background: "var(--surface-hover)", padding: 14, borderRadius: 10, marginBottom: 18, border: "1px solid var(--line)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <div className="hf-kpi-label">Record Payment Received</div>
+              <span style={{ fontSize: 11, color: "var(--rust)", fontWeight: 600 }}>Max: {fmt(customer.balance)}</span>
+            </div>
+            
+            <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+              {[
+                { key: "cash", label: "Cash" },
+                { key: "mpesa", label: "M-Pesa" },
+                { key: "bank", label: "Bank Transfer" },
+              ].map(m => (
+                <button
+                  key={m.key}
+                  type="button"
+                  className="hf-btn"
+                  style={{
+                    flex: 1,
+                    justifyContent: "center",
+                    fontSize: 11.5,
+                    padding: "5px 6px",
+                    background: paymentMethod === m.key ? "var(--rust)" : "var(--surface)",
+                    color: paymentMethod === m.key ? "#fff" : "var(--ink)",
+                    border: paymentMethod === m.key ? "1.5px solid var(--rust-dark)" : "1.5px solid var(--line)",
+                  }}
+                  onClick={() => setPaymentMethod(m.key)}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <input
+                className="hf-input"
+                type="number"
+                max={customer.balance}
+                placeholder={`Payment received (Max: ${fmt(customer.balance)})`}
+                value={amount}
+                onChange={e => setAmount(e.target.value)}
+              />
+              <input
+                className="hf-input"
+                placeholder="Reference / Note (optional, e.g. MPESA Ref)"
+                value={reference}
+                onChange={e => setReference(e.target.value)}
+              />
+              <button
+                className="hf-btn hf-btn-primary"
+                style={{ justifyContent: "center" }}
+                onClick={handlePay}
+                disabled={!amount || Number(amount) <= 0}
+              >
+                Record Debt Payment
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="disp" style={{ fontSize: 15, fontWeight: 700, marginBottom: 8 }}>Purchase History</div>
-        {sales.length === 0 && <div style={{ color: "var(--ink-soft)", fontSize: 13 }}>No purchases recorded yet.</div>}
-        {sales.map(s => (
-          <div key={s.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "6px 0", borderBottom: "1px solid var(--line)" }}>
-            <span>{s.invoiceNo} · {niceDate(s.date)}</span>
-            <span className="mono text-profit" style={{ fontWeight: 600 }}>{fmt(s.total)}</span>
-          </div>
-        ))}
+        {sales.length === 0 && <div style={{ color: "var(--ink-soft)", fontSize: 13, marginBottom: 14 }}>No purchases recorded yet.</div>}
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 20 }}>
+          {sales.map(s => (
+            <div key={s.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "6px 0", borderBottom: "1px solid var(--line)" }}>
+              <span>{s.invoiceNo} · {niceDate(s.date)}</span>
+              <span className="mono text-profit" style={{ fontWeight: 600 }}>{fmt(s.total)}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* Delete Customer Action */}
+        <div style={{ marginTop: "auto", borderTop: "1px solid var(--line)", paddingTop: 14, display: "flex", justifyContent: "flex-end" }}>
+          <button
+            type="button"
+            className="hf-btn hf-btn-ghost"
+            style={{ color: "var(--red)", borderColor: "var(--red-tint)", fontSize: 12.5 }}
+            onClick={() => onDeleteCustomer(customer.id)}
+            title="Permanently remove this customer account (Requires PIN)"
+          >
+            <Trash2 size={13} /> Delete Customer Account
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NewCustomerModal({ onCancel, onSave, notify }) {
+  const [form, setForm] = useState({
+    name: "",
+    phone: "",
+    creditLimit: "50000",
+  });
+
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  function handleSubmit() {
+    if (!form.name.trim()) {
+      notify("error", "Missing Information", "Please enter the customer's name.");
+      return;
+    }
+    const newCust = {
+      id: uid("CUST"),
+      name: form.name.trim(),
+      phone: form.phone.trim(),
+      creditLimit: Number(form.creditLimit) || 50000,
+      payments: [],
+    };
+    onSave(newCust);
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(20,24,30,0.6)", backdropFilter: "blur(2px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1200 }} onClick={onCancel}>
+      <div className="hf-card hf-modal-card" style={{ width: 440, maxWidth: "94vw", padding: "22px 20px" }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <div className="disp" style={{ fontSize: 20, fontWeight: 700 }}>Add New Customer</div>
+          <button onClick={onCancel} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><X size={18} /></button>
+        </div>
+
+        <Field label="Customer / Business Name *">
+          <input className="hf-input" placeholder="e.g. John Kamau / BuildCorp Builders" value={form.name} onChange={e => set("name", e.target.value)} autoFocus />
+        </Field>
+        <div style={{ height: 10 }} />
+        <Field label="Phone / Contact Number">
+          <input className="hf-input" placeholder="e.g. 0712 345 678" value={form.phone} onChange={e => set("phone", e.target.value)} />
+        </Field>
+        <div style={{ height: 10 }} />
+        <Field label="Credit Limit (KSh)">
+          <input className="hf-input mono" type="number" placeholder="e.g. 50000" value={form.creditLimit} onChange={e => set("creditLimit", e.target.value)} />
+        </Field>
+
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 18 }}>
+          <button className="hf-btn hf-btn-ghost" onClick={onCancel}>Cancel</button>
+          <button className="hf-btn hf-btn-primary" onClick={handleSubmit} disabled={!form.name.trim()}>Save Customer</button>
+        </div>
       </div>
     </div>
   );
@@ -5230,11 +6097,33 @@ function Quotations({ db, setDb, notify, currentUser }) {
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-        <div className="disp" style={{ fontSize: 26, fontWeight: 700 }}>Quotations</div>
-        <button className="hf-btn hf-btn-primary" onClick={() => setCreating(true)}>
-          <Plus size={15} /> New Quotation
-        </button>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <div className="disp" style={{ fontSize: 26, fontWeight: 700 }}>Quotations</div>
+          <div style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>
+            Prepare formal price quotes, export branded customer PDF quotations, and convert approved quotes to sales.
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            type="button"
+            className="hf-btn hf-btn-ghost"
+            onClick={() => {
+              if ((db.quotations || []).length === 0) {
+                notify("info", "No Quotations", "No quotations available to export.");
+                return;
+              }
+              exportQuotationsListPDF({ quotations: db.quotations, db });
+              notify("success", "Quotations Register Downloaded", `Exported ${(db.quotations || []).length} quotations to PDF summary.`);
+            }}
+            title="Download full quotations register PDF"
+          >
+            <Download size={14} /> Download Quotations List PDF
+          </button>
+          <button className="hf-btn hf-btn-primary" onClick={() => setCreating(true)}>
+            <Plus size={15} /> New Quotation
+          </button>
+        </div>
       </div>
       <div className="hf-card">
         <table className="hf-table">
@@ -5245,13 +6134,13 @@ function Quotations({ db, setDb, notify, currentUser }) {
               <th>Date</th>
               <th>Total Amount</th>
               <th>Status</th>
-              <th></th>
+              <th style={{ width: 140, textAlign: "right" }}>Actions</th>
             </tr>
           </thead>
           <tbody>
-            {db.quotations.map(q => {
-              const cust = db.customers.find(c => c.id === q.customerId);
-              const total = q.items.reduce((a, i) => a + i.unitPrice * i.qty, 0);
+            {(db.quotations || []).map(q => {
+              const cust = (db.customers || []).find(c => c.id === q.customerId);
+              const total = (q.items || []).reduce((a, i) => a + i.unitPrice * i.qty, 0);
               return (
                 <tr key={q.id} style={{ cursor: "pointer" }} onClick={() => setViewing(q)}>
                   <td className="mono" style={{ fontWeight: 600 }}>{q.number}</td>
@@ -5259,11 +6148,27 @@ function Quotations({ db, setDb, notify, currentUser }) {
                   <td>{niceDate(q.date)}</td>
                   <td className="mono text-profit" style={{ fontWeight: 600 }}>{fmt(total)}</td>
                   <td><Pill tone={q.status === "converted" ? "green" : "steel"}>{q.status.toUpperCase()}</Pill></td>
-                  <td><ChevronRight size={15} color="var(--ink-soft)" /></td>
+                  <td style={{ textAlign: "right" }} onClick={e => e.stopPropagation()}>
+                    <div style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
+                      <button
+                        type="button"
+                        className="hf-btn hf-btn-ghost"
+                        style={{ padding: "4px 8px", fontSize: 11.5 }}
+                        onClick={() => {
+                          exportQuotationPDF({ quote: q, db });
+                          notify("success", "Quotation PDF Downloaded", `Saved ${q.number}.`);
+                        }}
+                        title="Download branded official PDF quotation"
+                      >
+                        <Download size={12} /> PDF
+                      </button>
+                      <ChevronRight size={15} color="var(--ink-soft)" />
+                    </div>
+                  </td>
                 </tr>
               );
             })}
-            {db.quotations.length === 0 && (
+            {(db.quotations || []).length === 0 && (
               <tr><td colSpan={6} style={{ textAlign: "center", color: "var(--ink-soft)", padding: 24 }}>No quotations created yet.</td></tr>
             )}
           </tbody>
@@ -5272,16 +6177,19 @@ function Quotations({ db, setDb, notify, currentUser }) {
 
       {viewing && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(20,24,30,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }} onClick={() => setViewing(null)}>
-          <div className="hf-card" style={{ width: 460, maxWidth: "92vw", padding: 22 }} onClick={e => e.stopPropagation()}>
-            <div className="disp" style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>{viewing.number}</div>
+          <div className="hf-card" style={{ width: 480, maxWidth: "92vw", padding: 22 }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
+              <div className="disp" style={{ fontSize: 20, fontWeight: 700 }}>{viewing.number}</div>
+              <button onClick={() => setViewing(null)} style={{ background: "none", border: "none", cursor: "pointer" }}><X size={18} /></button>
+            </div>
             <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 14 }}>
-              {db.customers.find(c=>c.id===viewing.customerId)?.name || "Walk-in"} · {niceDate(viewing.date)}
+              {(db.customers || []).find(c=>c.id===viewing.customerId)?.name || "Walk-in Prospect"} · {niceDate(viewing.date)}
             </div>
             <table className="hf-table" style={{ marginBottom: 12 }}>
               <thead><tr><th>Product</th><th>Qty</th><th>Unit price</th><th>Total</th></tr></thead>
               <tbody>
-                {viewing.items.map((i, idx) => {
-                  const p = db.products.find(pp => pp.id === i.productId);
+                {(viewing.items || []).map((i, idx) => {
+                  const p = (db.products || []).find(pp => pp.id === i.productId);
                   return (
                     <tr key={idx}>
                       <td>{p?.name}</td>
@@ -5295,10 +6203,19 @@ function Quotations({ db, setDb, notify, currentUser }) {
             </table>
             <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, marginBottom: 16 }}>
               <span>Total Quotation</span>
-              <span className="mono text-profit" style={{ fontSize: 16 }}>{fmt(viewing.items.reduce((a,i)=>a+i.unitPrice*i.qty,0))}</span>
+              <span className="mono text-profit" style={{ fontSize: 16 }}>{fmt((viewing.items || []).reduce((a,i)=>a+i.unitPrice*i.qty,0))}</span>
             </div>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button className="hf-btn hf-btn-ghost" onClick={() => setViewing(null)}>Close</button>
+              <button
+                type="button"
+                className="hf-btn hf-btn-ghost"
+                onClick={() => {
+                  exportQuotationPDF({ quote: viewing, db });
+                  notify("success", "Quotation PDF Downloaded", `Saved ${viewing.number}.`);
+                }}
+              >
+                <Download size={14} /> Download PDF
+              </button>
               {viewing.status !== "converted" && (
                 <button className="hf-btn hf-btn-primary" onClick={() => convert(viewing)}>
                   <ArrowRight size={14} /> Convert to Sale
@@ -5397,6 +6314,18 @@ function Cashbook({ db, setDb, notify, currentUser }) {
   const netMovement = totalIn - totalOut;
 
   function addExpense(form) {
+    if (form.category === "Supplier Payment") {
+      if (!form.supplierId) {
+        notify("error", "Supplier Required", "Please select a supplier for supplier payments. No expense recorded.");
+        return;
+      }
+      const valCheck = validateSupplierPayment(db, form.supplierId, Number(form.amount));
+      if (!valCheck.valid) {
+        notify("error", "Payment Blocked", valCheck.reason);
+        return;
+      }
+    }
+
     const expId = uid("EXP");
     const todayStr = todayISO(0);
     const timeStr = new Date().toTimeString().slice(0, 5);
@@ -5552,9 +6481,16 @@ function NewExpenseModal({ db, onCancel, onSave, notify }) {
       notify("error", "Invalid Amount", "Please enter a valid expense amount.");
       return;
     }
-    if (form.category === "Supplier Payment" && !form.supplierId) {
-      notify("error", "Supplier Required", "Please select which supplier you are paying.");
-      return;
+    if (form.category === "Supplier Payment") {
+      if (!form.supplierId) {
+        notify("error", "Supplier Required", "Please select which supplier you are paying.");
+        return;
+      }
+      const valCheck = validateSupplierPayment(db, form.supplierId, Number(form.amount));
+      if (!valCheck.valid) {
+        notify("error", "Payment Blocked", valCheck.reason);
+        return;
+      }
     }
     onSave(form);
   }
@@ -5752,18 +6688,24 @@ function Reports({ db, notify, role }) {
 }
 
 /* ================= MODERN INTERACTIVE AUDIT LOG ================= */
-function AuditLog({ db, notify }) {
+function AuditLog({ db, setDb, notify, currentUser }) {
   const [query, setQuery] = useState("");
   const [user, setUser] = useState("all");
   const [selectedLog, setSelectedLog] = useState(null);
+  const [pinModal, setPinModal] = useState({
+    isOpen: false,
+    title: "",
+    description: "",
+    onSuccess: () => {},
+  });
 
   const users = useMemo(() => {
-    const set = new Set(db.auditLog.map(a => a.user));
+    const set = new Set((db.auditLog || []).map(a => a.user));
     return ["all", ...Array.from(set)];
   }, [db.auditLog]);
 
   const q = query.trim().toLowerCase();
-  const filtered = db.auditLog.filter(a => {
+  const filtered = (db.auditLog || []).filter(a => {
     if (user !== "all" && a.user !== user) return false;
     if (!q) return true;
     return (
@@ -5790,14 +6732,73 @@ function AuditLog({ db, notify }) {
     return <Pill tone="ink">AUDIT</Pill>;
   }
 
+  /* ---------- Delete Single Audit Log with Store PIN ---------- */
+  function handleDeleteSingleLog(logItem) {
+    setPinModal({
+      isOpen: true,
+      title: "Authorize Log Record Deletion",
+      description: `Enter Store Security PIN to permanently remove audit event "${logItem.action}".`,
+      onSuccess: () => {
+        setDb(prev => ({
+          ...prev,
+          auditLog: (prev.auditLog || []).filter(a => (a.id ? a.id !== logItem.id : a !== logItem))
+        }));
+        notify("success", "Audit Log Entry Deleted", "The selected audit log record was removed.");
+        setSelectedLog(null);
+        setPinModal({ isOpen: false, title: "", description: "", onSuccess: () => {} });
+      }
+    });
+  }
+
+  /* ---------- Clear All Audit Logs with Store PIN ---------- */
+  function handleClearAllLogs() {
+    if ((db.auditLog || []).length === 0) {
+      notify("info", "No Logs Found", "Audit log is already empty.");
+      return;
+    }
+
+    setPinModal({
+      isOpen: true,
+      title: "Authorize Clear All Audit Logs",
+      description: `WARNING: Enter Store Security PIN to permanently wipe all ${(db.auditLog || []).length} audit history records.`,
+      onSuccess: () => {
+        setDb(prev => ({
+          ...prev,
+          auditLog: []
+        }));
+        notify("success", "All Audit Logs Cleared", "System audit log was cleared successfully.");
+        setSelectedLog(null);
+        setPinModal({ isOpen: false, title: "", description: "", onSuccess: () => {} });
+      }
+    });
+  }
+
   return (
     <div>
+      <PinVerificationModal
+        isOpen={pinModal.isOpen}
+        title={pinModal.title}
+        description={pinModal.description}
+        onSuccess={pinModal.onSuccess}
+        onCancel={() => setPinModal({ isOpen: false, title: "", description: "", onSuccess: () => {} })}
+        db={db}
+      />
+
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 12, flexWrap: "wrap" }}>
         <div>
           <div className="disp" style={{ fontSize: 26, fontWeight: 700 }}>System Audit Log</div>
           <div style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>Complete traceability of all sales, payments, price changes, and stock movements.</div>
         </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <button
+            type="button"
+            className="hf-btn hf-btn-ghost"
+            style={{ color: "var(--red)", borderColor: "var(--red)" }}
+            onClick={handleClearAllLogs}
+            title="Wipe audit log history (Requires PIN)"
+          >
+            <Trash2 size={14} /> Clear All Logs
+          </button>
           <button className="hf-btn hf-btn-ghost" onClick={downloadPDF}>
             <Download size={15} /> Download PDF
           </button>
@@ -5812,7 +6813,7 @@ function AuditLog({ db, notify }) {
       </div>
 
       <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 8, display: "flex", justifyContent: "space-between" }}>
-        <span>Showing <b>{filtered.length}</b> of <b>{db.auditLog.length}</b> events</span>
+        <span>Showing <b>{filtered.length}</b> of <b>{(db.auditLog || []).length}</b> events</span>
         <span style={{ fontStyle: "italic" }}>Tip: Click on any log row to inspect detailed transaction metadata.</span>
       </div>
 
@@ -5825,7 +6826,7 @@ function AuditLog({ db, notify }) {
               <th style={{ width: 100 }}>Type</th>
               <th>Action Description</th>
               <th>Reference / Amount</th>
-              <th style={{ width: 50 }}></th>
+              <th style={{ width: 80, textAlign: "right" }}></th>
             </tr>
           </thead>
           <tbody>
@@ -5855,7 +6856,20 @@ function AuditLog({ db, notify }) {
                 <td>{getCategoryPill(a.category)}</td>
                 <td style={{ fontWeight: 500 }}>{a.action}</td>
                 <td className="mono" style={{ color: "var(--ink)" }}>{a.detail || "—"}</td>
-                <td><Eye size={15} color="var(--ink-soft)" /></td>
+                <td style={{ textAlign: "right" }} onClick={e => e.stopPropagation()}>
+                  <div style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
+                    <button
+                      type="button"
+                      className="hf-btn hf-btn-ghost"
+                      style={{ padding: "4px 6px", color: "var(--red)" }}
+                      onClick={() => handleDeleteSingleLog(a)}
+                      title="Delete log record (Requires PIN)"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                    <Eye size={15} color="var(--ink-soft)" />
+                  </div>
+                </td>
               </tr>
             ))}
             {filtered.length === 0 && (
@@ -5903,7 +6917,15 @@ function AuditLog({ db, notify }) {
               <Stat label="Affected Entity" value={selectedLog.target || "System"} />
             </div>
 
-            <div style={{ borderTop: "1px solid var(--line)", paddingTop: 14, display: "flex", justifyContent: "flex-end" }}>
+            <div style={{ borderTop: "1px solid var(--line)", paddingTop: 14, display: "flex", justifyContent: "space-between" }}>
+              <button
+                type="button"
+                className="hf-btn hf-btn-ghost"
+                style={{ color: "var(--red)" }}
+                onClick={() => handleDeleteSingleLog(selectedLog)}
+              >
+                <Trash2 size={14} /> Delete Record
+              </button>
               <button className="hf-btn hf-btn-dark" onClick={() => setSelectedLog(null)}>Done</button>
             </div>
           </div>
@@ -6506,7 +7528,7 @@ export default function App() {
   }
 
   const role = currentUser.role || "owner";
-  const allowed = (item) => item.roles.includes(role);
+  const allowed = (item) => role === "owner" || item.roles.includes(role) || item.roles.includes("cashier");
   const currentNav = NAV.find(n => n.key === page);
   const restricted = currentNav && !allowed(currentNav);
 
@@ -6533,7 +7555,7 @@ export default function App() {
     quotations: <Quotations db={db} setDb={setDb} notify={notify} currentUser={currentUser} />,
     cashbook: <Cashbook db={db} setDb={setDb} notify={notify} currentUser={currentUser} />,
     reports: <Reports db={db} notify={notify} role={role} />,
-    audit: <AuditLog db={db} notify={notify} />,
+    audit: <AuditLog db={db} setDb={setDb} notify={notify} currentUser={currentUser} />,
   };
 
   return (

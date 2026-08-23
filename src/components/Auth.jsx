@@ -678,6 +678,11 @@ export function ProfileModal({ currentUser, db, setDb, onUserUpdate, onClose, no
   const [confirmPin, setConfirmPin] = useState("");
   const [showPin, setShowPin] = useState(false);
 
+  // Store Master Deletion PIN (Owner Only)
+  const [storeActionPin, setStoreActionPin] = useState("");
+  const [confirmStoreActionPin, setConfirmStoreActionPin] = useState("");
+  const [showActionPin, setShowActionPin] = useState(false);
+
   // Own Password Management
   const [currentPass, setCurrentPass] = useState("");
   const [newPass, setNewPass] = useState("");
@@ -694,6 +699,8 @@ export function ProfileModal({ currentUser, db, setDb, onUserUpdate, onClose, no
     const trimmedPhone = sanitizeString(phone).trim();
     const trimmedPin = newPin.trim();
     const trimmedConfirmPin = confirmPin.trim();
+    const trimmedActionPin = storeActionPin.trim();
+    const trimmedConfirmActionPin = confirmStoreActionPin.trim();
     const trimmedCurrentPass = currentPass.trim();
     const trimmedNewPass = newPass.trim();
     const trimmedConfirmPass = confirmPass.trim();
@@ -718,11 +725,12 @@ export function ProfileModal({ currentUser, db, setDb, onUserUpdate, onClose, no
     );
 
     const isChangingPin = !!trimmedPin;
+    const isChangingActionPin = currentUser.role === "owner" && !!trimmedActionPin;
     const isChangingPass = !!trimmedNewPass;
     const isChangingUser = trimmedUser !== currentUser.username.toLowerCase();
 
     // Security validation: verify current password for security sensitive modifications
-    if (isChangingPin || isChangingPass || isChangingUser) {
+    if (isChangingPin || isChangingActionPin || isChangingPass || isChangingUser) {
       if (!trimmedCurrentPass) {
         setError("Please enter your current password to authorize security & credential updates.");
         return;
@@ -734,7 +742,7 @@ export function ProfileModal({ currentUser, db, setDb, onUserUpdate, onClose, no
       }
     }
 
-    // Validate PIN if changing
+    // Validate Personal PIN if changing
     if (isChangingPin) {
       if (!isValidPin(trimmedPin)) {
         setError("Recovery PIN must be 4 to 6 numeric digits (e.g. 8888 or 1234).");
@@ -742,6 +750,18 @@ export function ProfileModal({ currentUser, db, setDb, onUserUpdate, onClose, no
       }
       if (trimmedPin !== trimmedConfirmPin) {
         setError("New Recovery PINs do not match. Please retype carefully.");
+        return;
+      }
+    }
+
+    // Validate Store Deletion PIN if changing (Owner only)
+    if (isChangingActionPin) {
+      if (!isValidPin(trimmedActionPin)) {
+        setError("Store Security / Deletion PIN must be 4 to 6 numeric digits (e.g. 8888).");
+        return;
+      }
+      if (trimmedActionPin !== trimmedConfirmActionPin) {
+        setError("Store Security / Deletion PINs do not match. Please re-enter carefully.");
         return;
       }
     }
@@ -770,6 +790,11 @@ export function ProfileModal({ currentUser, db, setDb, onUserUpdate, onClose, no
         updatedPin = await hashPassword(trimmedPin);
       }
 
+      let updatedActionPin = db?.settings?.actionPin;
+      if (isChangingActionPin) {
+        updatedActionPin = await hashPassword(trimmedActionPin);
+      }
+
       const updatedFullUser = {
         ...dbUser,
         id: dbUser?.id || currentUser.id,
@@ -783,6 +808,7 @@ export function ProfileModal({ currentUser, db, setDb, onUserUpdate, onClose, no
 
       const auditDetails = [];
       if (isChangingPin) auditDetails.push("Security Recovery PIN updated");
+      if (isChangingActionPin) auditDetails.push("Universal Store Deletion PIN updated");
       if (isChangingPass) auditDetails.push("Password updated");
       if (isChangingUser) auditDetails.push(`Username changed to ${trimmedUser}`);
       if (auditDetails.length === 0) auditDetails.push("Profile details updated");
@@ -795,6 +821,10 @@ export function ProfileModal({ currentUser, db, setDb, onUserUpdate, onClose, no
 
       const newDb = {
         ...db,
+        settings: {
+          ...(db.settings || {}),
+          actionPin: updatedActionPin,
+        },
         users: updatedUsers,
         auditLog: [
           {
@@ -803,7 +833,7 @@ export function ProfileModal({ currentUser, db, setDb, onUserUpdate, onClose, no
             user: currentUser.name,
             role: currentUser.role,
             category: "Security",
-            action: `Updated own profile credentials (${currentUser.username})`,
+            action: `Updated profile & security credentials (${currentUser.username})`,
             detail: auditDetails.join(", "),
             target: trimmedUser,
           },
@@ -842,14 +872,14 @@ export function ProfileModal({ currentUser, db, setDb, onUserUpdate, onClose, no
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(20,24,30,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999 }} onClick={onClose}>
-      <div className="hf-card" style={{ width: 500, maxWidth: "92vw", maxHeight: "90vh", overflowY: "auto", padding: 24 }} onClick={e => e.stopPropagation()}>
+      <div className="hf-card" style={{ width: 520, maxWidth: "94vw", maxHeight: "90vh", overflowY: "auto", padding: 24 }} onClick={e => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
           <div>
             <div className="disp" style={{ fontSize: 22, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>
               <Key size={20} color="var(--rust)" /> My Profile & Security Credentials
             </div>
             <div style={{ fontSize: 12, color: "var(--ink-soft)" }}>
-              Manage your personal login, recovery PIN, and password.
+              Manage your personal login, recovery PIN, and store security authorizations.
             </div>
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)" }}><X size={18} /></button>
@@ -885,16 +915,16 @@ export function ProfileModal({ currentUser, db, setDb, onUserUpdate, onClose, no
         <div style={{ background: "var(--surface-hover)", border: "1px solid var(--line)", borderRadius: 10, padding: 14, marginBottom: 14 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
             <div style={{ fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}>
-              <ShieldCheck size={16} color="var(--green)" /> Security Recovery PIN
+              <ShieldCheck size={16} color="var(--green)" /> Personal Recovery PIN
             </div>
             <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>4–6 digits numeric</span>
           </div>
           <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginBottom: 10 }}>
-            Used to reset your password if you ever forget it. Only you (and the shop owner) can set this PIN.
+            Used to reset your own password if you ever forget it.
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <div>
-              <div className="hf-kpi-label" style={{ marginBottom: 4 }}>New PIN (Leave blank to keep)</div>
+              <div className="hf-kpi-label" style={{ marginBottom: 4 }}>New Personal PIN (Leave blank to keep)</div>
               <div style={{ position: "relative" }}>
                 <input
                   className="hf-input mono hf-input-with-right-icon"
@@ -915,7 +945,7 @@ export function ProfileModal({ currentUser, db, setDb, onUserUpdate, onClose, no
               </div>
             </div>
             <div>
-              <div className="hf-kpi-label" style={{ marginBottom: 4 }}>Confirm New PIN</div>
+              <div className="hf-kpi-label" style={{ marginBottom: 4 }}>Confirm New Personal PIN</div>
               <input
                 className="hf-input mono"
                 type={showPin ? "text" : "password"}
@@ -927,6 +957,57 @@ export function ProfileModal({ currentUser, db, setDb, onUserUpdate, onClose, no
             </div>
           </div>
         </div>
+
+        {/* OWNER-ONLY: Store Security & Master Deletion PIN */}
+        {currentUser.role === "owner" && (
+          <div style={{ background: "var(--surface-hover)", border: "1.5px solid var(--rust-tint)", borderRadius: 10, padding: 14, marginBottom: 14 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 700, display: "flex", alignItems: "center", gap: 6, color: "var(--rust)" }}>
+                <Key size={16} /> Store Security & Master Deletion PIN
+              </div>
+              <span className="hf-pill" style={{ background: "var(--rust-tint)", color: "var(--rust)", fontSize: 10.5, fontWeight: 700 }}>
+                Owner Master Control
+              </span>
+            </div>
+            <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginBottom: 10 }}>
+              This PIN is required whenever deleting sales from sales history, clearing audit logs, or removing customers and suppliers. Give this PIN to your employees only when you authorize them to delete records.
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div>
+                <div className="hf-kpi-label" style={{ marginBottom: 4 }}>New Master Deletion PIN</div>
+                <div style={{ position: "relative" }}>
+                  <input
+                    className="hf-input mono hf-input-with-right-icon"
+                    type={showActionPin ? "text" : "password"}
+                    maxLength={6}
+                    style={{ paddingRight: 40 }}
+                    placeholder="Default: 8888"
+                    value={storeActionPin}
+                    onChange={e => setStoreActionPin(e.target.value.replace(/\D/g, ""))}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowActionPin(!showActionPin)}
+                    style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)", padding: 4, display: "flex", alignItems: "center", justifyContent: "center" }}
+                  >
+                    {showActionPin ? <EyeOff size={15} /> : <Eye size={15} />}
+                  </button>
+                </div>
+              </div>
+              <div>
+                <div className="hf-kpi-label" style={{ marginBottom: 4 }}>Confirm Master Deletion PIN</div>
+                <input
+                  className="hf-input mono"
+                  type={showActionPin ? "text" : "password"}
+                  maxLength={6}
+                  placeholder="Re-type Master PIN"
+                  value={confirmStoreActionPin}
+                  onChange={e => setConfirmStoreActionPin(e.target.value.replace(/\D/g, ""))}
+                />
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Change Password Section */}
         <div style={{ background: "var(--surface-hover)", border: "1px solid var(--line)", borderRadius: 10, padding: 14, marginBottom: 14 }}>
@@ -1018,6 +1099,7 @@ export function UserManagementModal({ currentUser, db, setDb, onClose, notify })
     phone: "",
     pin: "1234",
   });
+  const [customRoleInput, setCustomRoleInput] = useState("");
   const [showNewPass, setShowNewPass] = useState(false);
   const [showNewPin, setShowNewPin] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
@@ -1036,6 +1118,7 @@ export function UserManagementModal({ currentUser, db, setDb, onClose, notify })
   const [editName, setEditName] = useState("");
   const [editPhone, setEditPhone] = useState("");
   const [editRole, setEditRole] = useState("cashier");
+  const [editCustomRoleInput, setEditCustomRoleInput] = useState("");
   const [resetPass, setResetPass] = useState("");
   const [confirmResetPass, setConfirmResetPass] = useState("");
   const [showResetPass, setShowResetPass] = useState(false);
@@ -1069,7 +1152,13 @@ export function UserManagementModal({ currentUser, db, setDb, onClose, notify })
     setActiveAction({ type: "edit", user });
     setEditName(user.name || "");
     setEditPhone(user.phone || "");
-    setEditRole(user.role || "cashier");
+    if (["cashier", "storekeeper", "admin", "owner"].includes(user.role)) {
+      setEditRole(user.role);
+      setEditCustomRoleInput("");
+    } else {
+      setEditRole("custom");
+      setEditCustomRoleInput(user.role || "");
+    }
     setResetPass("");
     setConfirmResetPass("");
     setEditError("");
@@ -1156,6 +1245,10 @@ export function UserManagementModal({ currentUser, db, setDb, onClose, notify })
     const cleanPass = resetPass.trim();
     const cleanConfirm = confirmResetPass.trim();
 
+    const resolvedRole = editRole === "custom" 
+      ? (sanitizeString(editCustomRoleInput).trim().toLowerCase() || "cashier") 
+      : editRole;
+
     if (!cleanName) {
       setEditError("Display Name cannot be empty.");
       return;
@@ -1183,13 +1276,13 @@ export function UserManagementModal({ currentUser, db, setDb, onClose, notify })
         ...targetUser,
         name: cleanName,
         phone: cleanPhone,
-        role: editRole,
+        role: resolvedRole,
         password: updatedPassword,
       };
 
       const auditDetails = [];
       if (cleanPass) auditDetails.push("Password reset by Owner");
-      if (editRole !== targetUser.role) auditDetails.push(`Role changed to ${editRole}`);
+      if (resolvedRole !== targetUser.role) auditDetails.push(`Role changed to ${resolvedRole}`);
       if (cleanName !== targetUser.name) auditDetails.push(`Name changed to ${cleanName}`);
       if (auditDetails.length === 0) auditDetails.push("Details updated");
 
@@ -1287,6 +1380,10 @@ export function UserManagementModal({ currentUser, db, setDb, onClose, notify })
     const cleanPhone = sanitizeString(newUser.phone).trim();
     const pinToUse = (newUser.pin || "1234").trim();
 
+    const resolvedRole = newUser.role === "custom" 
+      ? (sanitizeString(customRoleInput).trim().toLowerCase() || "cashier") 
+      : newUser.role;
+
     if (!cleanUsername || !cleanPassword || !cleanName) {
       notify("error", "Missing Fields", "Username, name, and password are required.");
       return;
@@ -1317,7 +1414,7 @@ export function UserManagementModal({ currentUser, db, setDb, onClose, notify })
         id: "u-" + Math.random().toString(36).slice(2, 7),
         username: cleanUsername,
         name: cleanName,
-        role: newUser.role,
+        role: resolvedRole,
         password: hashedPassword,
         phone: cleanPhone,
         pin: hashedPin,
@@ -1351,9 +1448,10 @@ export function UserManagementModal({ currentUser, db, setDb, onClose, notify })
       await pushUserToSupabase(created);
       autoSyncDatabase(newDb, 0);
 
-      notify("success", "Staff Account Created", `${created.name} (${created.username}) has been securely provisioned with PIN.`);
+      notify("success", "Staff Account Created", `${created.name} (${created.username}) has been provisioned as ${created.role}.`);
       setShowAdd(false);
       setNewUser({ username: "", name: "", role: "cashier", password: "", phone: "", pin: "1234" });
+      setCustomRoleInput("");
     } catch (err) {
       console.error(err);
       notify("error", "Creation Failed", "Could not encrypt user credentials.");
@@ -1364,14 +1462,14 @@ export function UserManagementModal({ currentUser, db, setDb, onClose, notify })
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(20,24,30,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999 }} onClick={onClose}>
-      <div className="hf-card" style={{ width: 680, maxWidth: "94vw", maxHeight: "88vh", overflowY: "auto", padding: 24 }} onClick={e => e.stopPropagation()}>
+      <div className="hf-card" style={{ width: 700, maxWidth: "95vw", maxHeight: "88vh", overflowY: "auto", padding: 24 }} onClick={e => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
           <div>
             <div className="disp" style={{ fontSize: 22, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>
               <ShieldCheck size={22} color="var(--rust)" /> Staff & Account Management
             </div>
             <div style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>
-              As the <b>Owner</b>, you can manage employee roles, reset passwords, and set/reset their <b>Security Recovery PINs</b>.
+              As the <b>Owner</b>, you can create employees with preset or custom roles, reset passwords, and set their <b>Security Recovery PINs</b>.
             </div>
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)" }}><X size={18} /></button>
@@ -1381,7 +1479,7 @@ export function UserManagementModal({ currentUser, db, setDb, onClose, notify })
         <div style={{ background: "var(--surface-hover)", border: "1px solid var(--line)", borderRadius: 10, padding: "10px 14px", marginBottom: 16, display: "flex", alignItems: "center", gap: 10 }}>
           <Key size={18} color="var(--rust)" />
           <div style={{ fontSize: 12, color: "var(--ink)" }}>
-            <b>Employee PIN Security:</b> Employees can use their PIN to reset their forgotten passwords. Employees can change their own PINs in their profile, but <b>cannot</b> view or change each other's PINs. Only you (the Owner) have the privilege to reset PINs for any employee.
+            <b>Employee PIN & Role Control:</b> Employees can use their PIN to recover forgotten passwords. Custom roles safely grant everyday staff privileges (POS, Inventory, Receiving) while preserving owner-only security.
           </div>
         </div>
 
@@ -1482,7 +1580,17 @@ export function UserManagementModal({ currentUser, db, setDb, onClose, notify })
                   <option value="storekeeper">Storekeeper (Inventory & Receiving)</option>
                   <option value="admin">Admin (Operations & Stock)</option>
                   <option value="owner">Owner (Full Privileges)</option>
+                  <option value="custom">Custom Staff Role...</option>
                 </select>
+                {newUser.role === "custom" && (
+                  <input
+                    className="hf-input"
+                    style={{ marginTop: 6 }}
+                    placeholder="Enter custom role (e.g. Yard Master, Loader, Driver)"
+                    value={customRoleInput}
+                    onChange={e => setCustomRoleInput(e.target.value)}
+                  />
+                )}
               </div>
               <div>
                 <div className="hf-kpi-label" style={{ marginBottom: 3 }}>Initial Password (min 6 chars) *</div>
@@ -1549,16 +1657,29 @@ export function UserManagementModal({ currentUser, db, setDb, onClose, notify })
       </div>
 
       {/* ------------------------------------------------------------------
-         SUB-MODAL: OWNER CHANGE EMPLOYEE PIN
+         SUB-MODAL: OWNER CHANGE EMPLOYEE PIN (With event stopPropagation)
          ------------------------------------------------------------------ */}
       {activeAction?.type === "pin" && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(10,12,16,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10000 }}>
-          <div className="hf-card" style={{ width: 440, maxWidth: "90vw", padding: 22, boxShadow: "var(--shadow-lg)" }}>
+        <div
+          style={{ position: "fixed", inset: 0, background: "rgba(10,12,16,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10000 }}
+          onClick={e => { e.stopPropagation(); setActiveAction(null); }}
+        >
+          <div
+            className="hf-card"
+            style={{ width: 440, maxWidth: "90vw", padding: 22, boxShadow: "var(--shadow-lg)" }}
+            onClick={e => e.stopPropagation()}
+          >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <div className="disp" style={{ fontSize: 18, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}>
                 <Key size={18} color="var(--rust)" /> Set PIN for {activeAction.user.name}
               </div>
-              <button onClick={() => setActiveAction(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)" }}><X size={16} /></button>
+              <button
+                type="button"
+                onClick={e => { e.stopPropagation(); setActiveAction(null); }}
+                style={{ background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)" }}
+              >
+                <X size={16} />
+              </button>
             </div>
 
             <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 14 }}>
@@ -1581,12 +1702,13 @@ export function UserManagementModal({ currentUser, db, setDb, onClose, notify })
                   style={{ paddingRight: 40 }}
                   placeholder="Enter 4-6 digits"
                   value={empPin}
+                  onClick={e => e.stopPropagation()}
                   onChange={e => { setEmpPin(e.target.value.replace(/\D/g, "")); setPinError(""); }}
                   autoFocus
                 />
                 <button
                   type="button"
-                  onClick={() => setShowEmpPin(!showEmpPin)}
+                  onClick={e => { e.stopPropagation(); setShowEmpPin(!showEmpPin); }}
                   style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)", padding: 4, display: "flex", alignItems: "center", justifyContent: "center" }}
                 >
                   {showEmpPin ? <EyeOff size={15} /> : <Eye size={15} />}
@@ -1602,6 +1724,7 @@ export function UserManagementModal({ currentUser, db, setDb, onClose, notify })
                 maxLength={6}
                 placeholder="Re-type PIN to confirm"
                 value={confirmEmpPin}
+                onClick={e => e.stopPropagation()}
                 onChange={e => { setConfirmEmpPin(e.target.value.replace(/\D/g, "")); setPinError(""); }}
               />
             </div>
@@ -1613,7 +1736,7 @@ export function UserManagementModal({ currentUser, db, setDb, onClose, notify })
                 <button
                   key={preset}
                   type="button"
-                  onClick={() => { setEmpPin(preset); setConfirmEmpPin(preset); setPinError(""); }}
+                  onClick={e => { e.stopPropagation(); setEmpPin(preset); setConfirmEmpPin(preset); setPinError(""); }}
                   className="hf-btn hf-btn-ghost"
                   style={{ padding: "2px 6px", fontSize: 11, borderRadius: 5 }}
                 >
@@ -1623,8 +1746,8 @@ export function UserManagementModal({ currentUser, db, setDb, onClose, notify })
             </div>
 
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button className="hf-btn hf-btn-ghost" onClick={() => setActiveAction(null)}>Cancel</button>
-              <button className="hf-btn hf-btn-primary" onClick={handleSavePin} disabled={isSavingPin || !empPin || !confirmEmpPin}>
+              <button type="button" className="hf-btn hf-btn-ghost" onClick={e => { e.stopPropagation(); setActiveAction(null); }}>Cancel</button>
+              <button type="button" className="hf-btn hf-btn-primary" onClick={handleSavePin} disabled={isSavingPin || !empPin || !confirmEmpPin}>
                 <Check size={14} /> {isSavingPin ? "Encrypting..." : "Save PIN"}
               </button>
             </div>
@@ -1636,13 +1759,26 @@ export function UserManagementModal({ currentUser, db, setDb, onClose, notify })
          SUB-MODAL: OWNER EDIT EMPLOYEE ACCOUNT & RESET PASSWORD
          ------------------------------------------------------------------ */}
       {activeAction?.type === "edit" && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(10,12,16,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10000 }}>
-          <div className="hf-card" style={{ width: 480, maxWidth: "90vw", padding: 22, boxShadow: "var(--shadow-lg)" }}>
+        <div
+          style={{ position: "fixed", inset: 0, background: "rgba(10,12,16,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10000 }}
+          onClick={e => { e.stopPropagation(); setActiveAction(null); }}
+        >
+          <div
+            className="hf-card"
+            style={{ width: 480, maxWidth: "90vw", padding: 22, boxShadow: "var(--shadow-lg)" }}
+            onClick={e => e.stopPropagation()}
+          >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <div className="disp" style={{ fontSize: 18, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}>
                 <Edit3 size={18} color="var(--rust)" /> Edit Account — {activeAction.user.username}
               </div>
-              <button onClick={() => setActiveAction(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)" }}><X size={16} /></button>
+              <button
+                type="button"
+                onClick={e => { e.stopPropagation(); setActiveAction(null); }}
+                style={{ background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)" }}
+              >
+                <X size={16} />
+              </button>
             </div>
 
             {editError && (
@@ -1654,11 +1790,11 @@ export function UserManagementModal({ currentUser, db, setDb, onClose, notify })
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
               <div>
                 <div className="hf-kpi-label" style={{ marginBottom: 3 }}>Display Name *</div>
-                <input className="hf-input" value={editName} onChange={e => setEditName(e.target.value)} />
+                <input className="hf-input" value={editName} onClick={e => e.stopPropagation()} onChange={e => setEditName(e.target.value)} />
               </div>
               <div>
                 <div className="hf-kpi-label" style={{ marginBottom: 3 }}>Phone Number</div>
-                <input className="hf-input" value={editPhone} onChange={e => setEditPhone(e.target.value)} />
+                <input className="hf-input" value={editPhone} onClick={e => e.stopPropagation()} onChange={e => setEditPhone(e.target.value)} />
               </div>
             </div>
 
@@ -1669,12 +1805,24 @@ export function UserManagementModal({ currentUser, db, setDb, onClose, notify })
                 value={editRole}
                 onChange={e => setEditRole(e.target.value)}
                 disabled={activeAction.user.id === currentUser.id}
+                onClick={e => e.stopPropagation()}
               >
                 <option value="cashier">Cashier (POS & Sales only)</option>
                 <option value="storekeeper">Storekeeper (Inventory & Stock Receiving)</option>
                 <option value="admin">Admin (Operations & Stock)</option>
                 <option value="owner">Owner (Full Privileges)</option>
+                <option value="custom">Custom Staff Role...</option>
               </select>
+              {editRole === "custom" && (
+                <input
+                  className="hf-input"
+                  style={{ marginTop: 6 }}
+                  placeholder="Enter custom role title (e.g. Yard Master, Loader)"
+                  value={editCustomRoleInput}
+                  onClick={e => e.stopPropagation()}
+                  onChange={e => setEditCustomRoleInput(e.target.value)}
+                />
+              )}
               {activeAction.user.id === currentUser.id && (
                 <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 2 }}>
                   Your own role cannot be demoted from Owner.
@@ -1698,11 +1846,12 @@ export function UserManagementModal({ currentUser, db, setDb, onClose, notify })
                     style={{ paddingRight: 40 }}
                     placeholder="New password (min 6)"
                     value={resetPass}
+                    onClick={e => e.stopPropagation()}
                     onChange={e => setResetPass(e.target.value)}
                   />
                   <button
                     type="button"
-                    onClick={() => setShowResetPass(!showResetPass)}
+                    onClick={e => { e.stopPropagation(); setShowResetPass(!showResetPass); }}
                     style={{ position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)", padding: 4, display: "flex", alignItems: "center", justifyContent: "center" }}
                   >
                     {showResetPass ? <EyeOff size={14} /> : <Eye size={14} />}
@@ -1713,14 +1862,15 @@ export function UserManagementModal({ currentUser, db, setDb, onClose, notify })
                   type={showResetPass ? "text" : "password"}
                   placeholder="Confirm password"
                   value={confirmResetPass}
+                  onClick={e => e.stopPropagation()}
                   onChange={e => setConfirmResetPass(e.target.value)}
                 />
               </div>
             </div>
 
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button className="hf-btn hf-btn-ghost" onClick={() => setActiveAction(null)}>Cancel</button>
-              <button className="hf-btn hf-btn-primary" onClick={handleSaveEdit} disabled={isSavingEdit}>
+              <button type="button" className="hf-btn hf-btn-ghost" onClick={e => { e.stopPropagation(); setActiveAction(null); }}>Cancel</button>
+              <button type="button" className="hf-btn hf-btn-primary" onClick={handleSaveEdit} disabled={isSavingEdit}>
                 <Check size={14} /> {isSavingEdit ? "Saving..." : "Save Changes"}
               </button>
             </div>

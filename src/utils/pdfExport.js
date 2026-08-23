@@ -114,13 +114,18 @@ export function exportReceiptPDF({ sale, db }) {
   doc.roundedRect(12, 30, pageWidth - 24, 28, 2, 2, "S");
 
   const cust = db.customers.find(c => c.id === sale.customerId);
+  const paymentLabel = sale.payment === "mpesa" ? "M-PESA" 
+    : sale.payment === "bank" ? "BANK TRANSFER"
+    : sale.payment === "credit" ? "CREDIT ACCOUNT"
+    : sale.payment === "split" ? `SPLIT (Cash ${fmtCurrency(sale.splitCash || 0)} + M-Pesa)`
+    : "CASH";
 
   doc.setFont("helvetica", "bold");
   doc.setFontSize(8.5);
   doc.setTextColor(30, 35, 42);
-  doc.text(`Invoice No: ${sale.invoiceNo}`, 16, 37);
+  doc.text(`Invoice / Receipt: ${sale.invoiceNo}`, 16, 37);
   doc.text(`Date & Time: ${niceDate(sale.date)} · ${sale.time || new Date().toTimeString().slice(0, 5)}`, 16, 44);
-  doc.text(`Payment Mode: ${sale.payment === "mpesa" ? "M-PESA" : sale.payment.toUpperCase()}`, 16, 51);
+  doc.text(`Payment Mode: ${paymentLabel}`, 16, 51);
 
   doc.text(`Customer: ${cust ? cust.name : "Walk-in Customer"}`, pageWidth - 16, 37, { align: "right" });
   if (cust?.phone) {
@@ -628,5 +633,483 @@ function todayISO(offsetDays = 0) {
   const month = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+/**
+ * Export a Single Customer Price Quotation to PDF (Official Hardware Quotation)
+ */
+export function exportQuotationPDF({ quote, db }) {
+  const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+
+  const cust = db.customers.find(c => c.id === quote.customerId);
+  const dateFormatted = niceDate(quote.date);
+  const validUntil = niceDate(todayISO(30));
+
+  // Top Header Banner
+  doc.setFillColor(20, 23, 29); // #14171D
+  doc.rect(0, 0, pageWidth, 28, "F");
+
+  doc.setFillColor(193, 80, 47); // #C1502F Rust Accent
+  doc.rect(0, 28, pageWidth, 2.5, "F");
+
+  // Brand Name
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(16);
+  doc.setTextColor(255, 255, 255);
+  doc.text("HARDWAREFLOW", 14, 13);
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.setTextColor(232, 151, 126);
+  doc.text("BUILDING MATERIALS & HARDWARE SUPPLIES", 14, 20);
+
+  // Document Title
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(13);
+  doc.setTextColor(255, 255, 255);
+  doc.text("OFFICIAL PRICE QUOTATION", pageWidth - 14, 13, { align: "right" });
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  doc.setTextColor(170, 180, 195);
+  const nowTime = new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  doc.text(`Generated: ${dateFormatted} at ${nowTime}`, pageWidth - 14, 20, { align: "right" });
+
+  // Metadata Grid Boxes
+  const startY = 36;
+  const boxW = (pageWidth - 34) / 2;
+  const boxH = 28;
+
+  // Box 1: Quotation Details
+  doc.setFillColor(248, 249, 251);
+  doc.roundedRect(14, startY, boxW, boxH, 2, 2, "F");
+  doc.setDrawColor(220, 224, 230);
+  doc.roundedRect(14, startY, boxW, boxH, 2, 2, "S");
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.5);
+  doc.setTextColor(110, 120, 130);
+  doc.text("QUOTATION DETAILS", 18, startY + 6);
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9.5);
+  doc.setTextColor(30, 35, 42);
+  doc.text(`Quote Ref: ${quote.number}`, 18, startY + 13);
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.setTextColor(60, 70, 80);
+  doc.text(`Issue Date: ${dateFormatted}`, 18, startY + 19);
+  doc.text(`Validity: 30 Calendar Days (Until ${validUntil})`, 18, startY + 25);
+
+  // Box 2: Customer / Client Details
+  doc.setFillColor(248, 249, 251);
+  doc.roundedRect(14 + boxW + 6, startY, boxW, boxH, 2, 2, "F");
+  doc.setDrawColor(220, 224, 230);
+  doc.roundedRect(14 + boxW + 6, startY, boxW, boxH, 2, 2, "S");
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.5);
+  doc.setTextColor(110, 120, 130);
+  doc.text("PREPARED FOR (CLIENT)", 18 + boxW + 6, startY + 6);
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10);
+  doc.setTextColor(30, 35, 42);
+  doc.text(cust ? cust.name : "Walk-in Client / Prospect", 18 + boxW + 6, startY + 13);
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.setTextColor(60, 70, 80);
+  doc.text(`Contact: ${cust?.phone || "On Request"}`, 18 + boxW + 6, startY + 19);
+  doc.text(`Status: ${(quote.status || "draft").toUpperCase()}`, 18 + boxW + 6, startY + 25);
+
+  // Items Table
+  let quoteTotal = 0;
+  const tableBody = (quote.items || []).map((it, idx) => {
+    const prod = db.products.find(p => p.id === it.productId);
+    const qty = Number(it.qty) || 0;
+    const unitPrice = Number(it.unitPrice) || prod?.sellPrice || 0;
+    const lineTotal = qty * unitPrice;
+    quoteTotal += lineTotal;
+
+    return [
+      idx + 1,
+      prod?.name || "Hardware Item",
+      prod?.sku || "—",
+      `${qty} ${prod?.baseUnit || "pcs"}`,
+      fmtCurrency(unitPrice),
+      fmtCurrency(lineTotal),
+    ];
+  });
+
+  autoTable(doc, {
+    startY: startY + boxH + 8,
+    head: [["#", "Item Description & Specification", "SKU / Code", "Quantity", "Unit Price", "Line Total"]],
+    body: tableBody.length > 0 ? tableBody : [["—", "No items added to quotation", "—", "—", "—", "KSh 0"]],
+    theme: "grid",
+    headStyles: {
+      fillColor: [32, 40, 52],
+      textColor: [255, 255, 255],
+      fontStyle: "bold",
+      fontSize: 8.5,
+      cellPadding: 3,
+    },
+    bodyStyles: {
+      fontSize: 8,
+      cellPadding: 2.5,
+      textColor: [30, 35, 42],
+    },
+    alternateRowStyles: {
+      fillColor: [248, 249, 251],
+    },
+    columnStyles: {
+      0: { cellWidth: 10, halign: "center" },
+      1: { cellWidth: "auto", fontStyle: "bold" },
+      2: { cellWidth: 26 },
+      3: { cellWidth: 26, halign: "right" },
+      4: { cellWidth: 32, halign: "right" },
+      5: { cellWidth: 34, halign: "right", fontStyle: "bold", textColor: [30, 41, 59] },
+    },
+    margin: { left: 14, right: 14 },
+  });
+
+  // Quotation Total Card
+  const tableEndY = doc.lastAutoTable.finalY + 6;
+  const totalBoxW = 75;
+  const totalBoxH = 22;
+
+  doc.setFillColor(245, 247, 250);
+  doc.roundedRect(pageWidth - 14 - totalBoxW, tableEndY, totalBoxW, totalBoxH, 2, 2, "F");
+  doc.setDrawColor(220, 224, 230);
+  doc.roundedRect(pageWidth - 14 - totalBoxW, tableEndY, totalBoxW, totalBoxH, 2, 2, "S");
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8);
+  doc.setTextColor(110, 120, 130);
+  doc.text("TOTAL ESTIMATED VALUE", pageWidth - 14 - totalBoxW / 2, tableEndY + 7, { align: "center" });
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(12);
+  doc.setTextColor(47, 128, 80);
+  doc.text(fmtCurrency(quoteTotal), pageWidth - 14 - totalBoxW / 2, tableEndY + 16, { align: "center" });
+
+  // Terms & Payment Details Box
+  const termsY = tableEndY + totalBoxH + 8;
+  doc.setFillColor(252, 253, 254);
+  doc.roundedRect(14, termsY, pageWidth - 28, 30, 2, 2, "F");
+  doc.setDrawColor(228, 230, 234);
+  doc.roundedRect(14, termsY, pageWidth - 28, 30, 2, 2, "S");
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.5);
+  doc.setTextColor(193, 80, 47);
+  doc.text("PAYMENT METHODS & COMMERCIAL TERMS:", 18, termsY + 6);
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7.8);
+  doc.setTextColor(70, 80, 90);
+  doc.text("1. Accepted Payment: Cash, Direct Bank Transfer (EFT/RTGS), and Official M-Pesa Till / Paybill.", 18, termsY + 12);
+  doc.text("2. Bank Details: Equity Bank / KCB Bank · Account Name: HardwareFlow Enterprises · Acc: 01100223344", 18, termsY + 17);
+  doc.text("3. Delivery / Dispatch: Available on request across site locations. Offloading terms apply.", 18, termsY + 22);
+  doc.text("4. Pricing Validity: Prices are guaranteed for 30 calendar days from issue date.", 18, termsY + 27);
+
+  // Signature Block
+  const sigY = pageHeight - 34;
+  doc.setDrawColor(180, 185, 195);
+  doc.line(14, sigY, 70, sigY);
+  doc.line(pageWidth - 70, sigY, pageWidth - 14, sigY);
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(7.5);
+  doc.setTextColor(90, 100, 110);
+  doc.text("Prepared By: Store Sales Desk", 14, sigY + 5);
+  doc.text("Client Confirmation Signature", pageWidth - 70, sigY + 5);
+
+  addPDFFooter(doc);
+  doc.save(`Quotation-${quote.number}.pdf`);
+}
+
+/**
+ * Export Quotations Register / Summary List to PDF
+ */
+export function exportQuotationsListPDF({ quotations, db, filterInfo = "" }) {
+  const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  const count = (quotations || []).length;
+  const totalValue = (quotations || []).reduce((acc, q) => {
+    const qSum = (q.items || []).reduce((a, i) => a + (Number(i.unitPrice) || 0) * (Number(i.qty) || 0), 0);
+    return acc + qSum;
+  }, 0);
+
+  const convertedCount = (quotations || []).filter(q => q.status === "converted").length;
+  const draftCount = count - convertedCount;
+
+  const subtitle = `Summary of Quotes · Total Quotes: ${count} · Converted: ${convertedCount} · Draft: ${draftCount} · Pipeline Value: ${fmtCurrency(totalValue)}${filterInfo ? ` · Filter: ${filterInfo}` : ""}`;
+  addPDFHeader(doc, "Quotations Register & Pipeline Report", subtitle);
+
+  const tableBody = (quotations || []).map((q, idx) => {
+    const cust = db.customers.find(c => c.id === q.customerId);
+    const qSum = (q.items || []).reduce((a, i) => a + (Number(i.unitPrice) || 0) * (Number(i.qty) || 0), 0);
+    const itemsCount = (q.items || []).reduce((a, i) => a + (Number(i.qty) || 0), 0);
+
+    return [
+      idx + 1,
+      q.number || "—",
+      niceDate(q.date),
+      cust ? cust.name : "Walk-in Prospect",
+      cust?.phone || "—",
+      `${(q.items || []).length} items (${itemsCount} pcs)`,
+      fmtCurrency(qSum),
+      (q.status || "draft").toUpperCase(),
+    ];
+  });
+
+  autoTable(doc, {
+    startY: 42,
+    head: [["#", "Quote Ref", "Date", "Customer Name", "Phone", "Items / Quantity", "Quoted Value", "Status"]],
+    body: tableBody.length > 0 ? tableBody : [["—", "No quotations found matching criteria", "—", "—", "—", "—", "KSh 0", "—"]],
+    theme: "grid",
+    headStyles: {
+      fillColor: [32, 40, 52],
+      textColor: [255, 255, 255],
+      fontStyle: "bold",
+      fontSize: 8.5,
+      cellPadding: 3,
+    },
+    bodyStyles: {
+      fontSize: 8,
+      cellPadding: 2.5,
+      textColor: [30, 35, 42],
+    },
+    alternateRowStyles: {
+      fillColor: [248, 249, 251],
+    },
+    columnStyles: {
+      0: { cellWidth: 10, halign: "center" },
+      1: { cellWidth: 26, fontStyle: "bold" },
+      2: { cellWidth: 24 },
+      3: { cellWidth: 42, fontStyle: "bold" },
+      4: { cellWidth: 26 },
+      5: { cellWidth: 30 },
+      6: { cellWidth: 28, halign: "right", fontStyle: "bold", textColor: [47, 128, 80] },
+      7: { cellWidth: 22, halign: "center" },
+    },
+    margin: { left: 14, right: 14 },
+    didParseCell: function (data) {
+      if (data.column.index === 7 && data.section === "body") {
+        const val = String(data.cell.raw || "");
+        if (val === "CONVERTED") {
+          data.cell.styles.textColor = [47, 128, 80];
+          data.cell.styles.fontStyle = "bold";
+        }
+      }
+    }
+  });
+
+  addPDFFooter(doc);
+  doc.save(`Quotations-Register-${todayISO(0)}.pdf`);
+}
+
+/**
+ * Export Official Customer Supply / Commercial Tax Invoice PDF
+ * Supports single and multi-item purchases, custom/auto invoice numbers, bank transfer details
+ */
+export function exportInvoicePDF({ sale, db, customInvoiceNo = null }) {
+  const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+
+  const resolvedInvoiceNo = customInvoiceNo || sale.invoiceNo || `INV-${todayISO(0)}`;
+  const cust = db.customers.find(c => c.id === sale.customerId);
+  const dateFormatted = niceDate(sale.date);
+  const timeFormatted = sale.time || new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+
+  const paymentLabel = sale.payment === "mpesa" ? "M-PESA" 
+    : sale.payment === "bank" ? "BANK TRANSFER (PAID)"
+    : sale.payment === "credit" ? "CREDIT / ON ACCOUNT"
+    : sale.payment === "split" ? `SPLIT (Cash ${fmtCurrency(sale.splitCash || 0)} + M-Pesa)`
+    : "CASH ON COUNTER";
+
+  // Top Header Banner
+  doc.setFillColor(20, 23, 29); // #14171D
+  doc.rect(0, 0, pageWidth, 28, "F");
+
+  doc.setFillColor(193, 80, 47); // #C1502F
+  doc.rect(0, 28, pageWidth, 2.5, "F");
+
+  // Company Brand
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(16);
+  doc.setTextColor(255, 255, 255);
+  doc.text("HARDWAREFLOW", 14, 13);
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.setTextColor(232, 151, 126);
+  doc.text("BUILDING MATERIALS, HARDWARE & ELECTRICAL SUPPLIES", 14, 20);
+
+  // Invoice Title
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(13);
+  doc.setTextColor(255, 255, 255);
+  doc.text("TAX / COMMERCIAL INVOICE", pageWidth - 14, 13, { align: "right" });
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  doc.setTextColor(170, 180, 195);
+  doc.text("ORIGINAL SUPPLY DOCUMENT", pageWidth - 14, 20, { align: "right" });
+
+  // Metadata Grid Boxes
+  const startY = 36;
+  const boxW = (pageWidth - 34) / 2;
+  const boxH = 28;
+
+  // Box 1: Invoice & Payment Information
+  doc.setFillColor(248, 249, 251);
+  doc.roundedRect(14, startY, boxW, boxH, 2, 2, "F");
+  doc.setDrawColor(220, 224, 230);
+  doc.roundedRect(14, startY, boxW, boxH, 2, 2, "S");
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.5);
+  doc.setTextColor(110, 120, 130);
+  doc.text("INVOICE METADATA", 18, startY + 6);
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9.5);
+  doc.setTextColor(30, 35, 42);
+  doc.text(`Invoice No: ${resolvedInvoiceNo}`, 18, startY + 13);
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.setTextColor(60, 70, 80);
+  doc.text(`Date & Time: ${dateFormatted} · ${timeFormatted}`, 18, startY + 19);
+  doc.text(`Payment Mode: ${paymentLabel}`, 18, startY + 25);
+
+  // Box 2: Billed To / Customer Details
+  doc.setFillColor(248, 249, 251);
+  doc.roundedRect(14 + boxW + 6, startY, boxW, boxH, 2, 2, "F");
+  doc.setDrawColor(220, 224, 230);
+  doc.roundedRect(14 + boxW + 6, startY, boxW, boxH, 2, 2, "S");
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.5);
+  doc.setTextColor(110, 120, 130);
+  doc.text("BILLED TO / CUSTOMER", 18 + boxW + 6, startY + 6);
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10);
+  doc.setTextColor(30, 35, 42);
+  doc.text(cust ? cust.name : "Walk-in Cash Customer", 18 + boxW + 6, startY + 13);
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.setTextColor(60, 70, 80);
+  doc.text(`Phone / Mobile: ${cust?.phone || "Not Recorded"}`, 18 + boxW + 6, startY + 19);
+  doc.text(`Served By: ${sale.employee || "Cashier"}`, 18 + boxW + 6, startY + 25);
+
+  // Items Table
+  const tableBody = (sale.items || []).map((it, idx) => {
+    const prod = db.products.find(p => p.id === it.productId);
+    const qty = Number(it.qty) || 0;
+    const unitPrice = Number(it.unitPrice) || 0;
+    const lineTotal = qty * unitPrice;
+
+    return [
+      idx + 1,
+      prod?.name || "Product Item",
+      prod?.sku || "—",
+      `${qty} ${prod?.baseUnit || "pcs"}`,
+      fmtCurrency(unitPrice),
+      fmtCurrency(lineTotal),
+    ];
+  });
+
+  autoTable(doc, {
+    startY: startY + boxH + 8,
+    head: [["#", "Supplied Item Description", "SKU / Code", "Quantity", "Unit Price", "Total Amount"]],
+    body: tableBody.length > 0 ? tableBody : [["—", "No items recorded", "—", "—", "—", "KSh 0"]],
+    theme: "grid",
+    headStyles: {
+      fillColor: [32, 40, 52],
+      textColor: [255, 255, 255],
+      fontStyle: "bold",
+      fontSize: 8.5,
+      cellPadding: 3,
+    },
+    bodyStyles: {
+      fontSize: 8,
+      cellPadding: 2.5,
+      textColor: [30, 35, 42],
+    },
+    alternateRowStyles: {
+      fillColor: [248, 249, 251],
+    },
+    columnStyles: {
+      0: { cellWidth: 10, halign: "center" },
+      1: { cellWidth: "auto", fontStyle: "bold" },
+      2: { cellWidth: 26 },
+      3: { cellWidth: 26, halign: "right" },
+      4: { cellWidth: 32, halign: "right" },
+      5: { cellWidth: 34, halign: "right", fontStyle: "bold", textColor: [30, 41, 59] },
+    },
+    margin: { left: 14, right: 14 },
+  });
+
+  // Total Summary Card
+  const tableEndY = doc.lastAutoTable.finalY + 6;
+  const totalBoxW = 75;
+  const totalBoxH = 22;
+
+  doc.setFillColor(245, 247, 250);
+  doc.roundedRect(pageWidth - 14 - totalBoxW, tableEndY, totalBoxW, totalBoxH, 2, 2, "F");
+  doc.setDrawColor(220, 224, 230);
+  doc.roundedRect(pageWidth - 14 - totalBoxW, tableEndY, totalBoxW, totalBoxH, 2, 2, "S");
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8);
+  doc.setTextColor(110, 120, 130);
+  doc.text("TOTAL INVOICE AMOUNT", pageWidth - 14 - totalBoxW / 2, tableEndY + 7, { align: "center" });
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(12);
+  doc.setTextColor(47, 128, 80);
+  doc.text(fmtCurrency(sale.total), pageWidth - 14 - totalBoxW / 2, tableEndY + 16, { align: "center" });
+
+  // Bank & Settlement Instructions Box
+  const termsY = tableEndY + totalBoxH + 8;
+  doc.setFillColor(252, 253, 254);
+  doc.roundedRect(14, termsY, pageWidth - 28, 28, 2, 2, "F");
+  doc.setDrawColor(228, 230, 234);
+  doc.roundedRect(14, termsY, pageWidth - 28, 28, 2, 2, "S");
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.5);
+  doc.setTextColor(193, 80, 47);
+  doc.text("BANK TRANSFER & PAYMENT SETTLEMENT INSTRUCTIONS:", 18, termsY + 6);
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  doc.setTextColor(70, 80, 90);
+  doc.text("• Bank Account: Equity Bank / KCB Bank · Acc No: 01100223344 · Name: HardwareFlow Store", 18, termsY + 12);
+  doc.text("• M-Pesa Paybill: 888999 · Account: Use Invoice No (" + resolvedInvoiceNo + ")", 18, termsY + 17);
+  doc.text("• Goods once supplied in good order & accepted are not returnable without prior authorization.", 18, termsY + 22);
+
+  // Signatures
+  const sigY = pageHeight - 34;
+  doc.setDrawColor(180, 185, 195);
+  doc.line(14, sigY, 70, sigY);
+  doc.line(pageWidth - 70, sigY, pageWidth - 14, sigY);
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(7.5);
+  doc.setTextColor(90, 100, 110);
+  doc.text("Issued By: HardwareFlow Store", 14, sigY + 5);
+  doc.text("Customer Goods Received & Stamp", pageWidth - 70, sigY + 5);
+
+  addPDFFooter(doc);
+  doc.save(`Invoice-${resolvedInvoiceNo}.pdf`);
 }
 

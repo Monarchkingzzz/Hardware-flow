@@ -134,7 +134,7 @@ export async function pushDatabaseToSupabase(db) {
           name: s.name,
           phone: s.phone || null,
           terms: s.terms || "Net 30",
-          payments: s.payments || [],
+          payments: (s.payments || []).filter(p => Number(p.amount) > 0),
         })),
         { onConflict: "id" }
       );
@@ -145,7 +145,7 @@ export async function pushDatabaseToSupabase(db) {
       try {
         const { data: remoteSuppliers } = await supabase.from("suppliers").select("id");
         if (remoteSuppliers && remoteSuppliers.length > 0) {
-          const localSupplierIds = new Set(db.suppliers.map(s => s.id));
+          const localSupplierIds = new Set((db.suppliers || []).map(s => s.id));
           const toDelete = remoteSuppliers.filter(r => !localSupplierIds.has(r.id)).map(r => r.id);
           if (toDelete.length > 0) {
             await supabase.from("suppliers").delete().in("id", toDelete);
@@ -158,39 +158,41 @@ export async function pushDatabaseToSupabase(db) {
   }
 
   // 3. Products
-  if (db.products && db.products.length > 0) {
+  if (db.products) {
     tasks.push((async () => {
-      const { error } = await supabase.from("products").upsert(
-        db.products.map(p => ({
-          id: p.id,
-          name: p.name,
-          category: p.category || "General",
-          brand: p.brand || "",
-          sku: p.sku || "",
-          description: p.description || "",
-          base_unit: p.baseUnit || "piece",
-          purchase_unit: p.purchaseUnit || "piece",
-          conversion_factor: Number(p.conversionFactor) || 1,
-          buy_price: Number(p.buyPrice) || 0,
-          sell_price: Number(p.sellPrice) || 0,
-          contractor_price: Number(p.contractorPrice) || 0,
-          wholesale_price: Number(p.wholesalePrice) || 0,
-          min_stock: Number(p.minStock) || 0,
-          stock: Number(p.stock) || 0,
-          supplier_id: p.supplierId || null,
-          location: p.location || "Main Store",
-          history: p.history || [],
-        })),
-        { onConflict: "id" }
-      );
-      if (error) throw new Error(`Failed pushing Products: ${error.message}`);
-      results.products = db.products.length;
+      if (db.products.length > 0) {
+        const { error } = await supabase.from("products").upsert(
+          db.products.map(p => ({
+            id: p.id,
+            name: p.name,
+            category: p.category || "General",
+            brand: p.brand || "",
+            sku: p.sku || "",
+            description: p.description || "",
+            base_unit: p.baseUnit || "piece",
+            purchase_unit: p.purchaseUnit || "piece",
+            conversion_factor: Number(p.conversionFactor) || 1,
+            buy_price: Number(p.buyPrice) || 0,
+            sell_price: Number(p.sellPrice) || 0,
+            contractor_price: Number(p.contractorPrice) || 0,
+            wholesale_price: Number(p.wholesalePrice) || 0,
+            min_stock: Number(p.minStock) || 0,
+            stock: Number(p.stock) || 0,
+            supplier_id: p.supplierId || null,
+            location: p.location || "Main Store",
+            history: p.history || [],
+          })),
+          { onConflict: "id" }
+        );
+        if (error) throw new Error(`Failed pushing Products: ${error.message}`);
+        results.products = db.products.length;
+      }
 
       // Clean up deleted products if any
       try {
         const { data: remoteProducts } = await supabase.from("products").select("id");
         if (remoteProducts && remoteProducts.length > 0) {
-          const localProductIds = new Set(db.products.map(p => p.id));
+          const localProductIds = new Set((db.products || []).map(p => p.id));
           const toDelete = remoteProducts.filter(r => !localProductIds.has(r.id)).map(r => r.id);
           if (toDelete.length > 0) {
             await supabase.from("products").delete().in("id", toDelete);
@@ -203,26 +205,28 @@ export async function pushDatabaseToSupabase(db) {
   }
 
   // 4. Customers
-  if (db.customers && db.customers.length > 0) {
+  if (db.customers) {
     tasks.push((async () => {
-      const { error } = await supabase.from("customers").upsert(
-        db.customers.map(c => ({
-          id: c.id,
-          name: c.name,
-          phone: c.phone || null,
-          credit_limit: Number(c.creditLimit) || 0,
-          payments: c.payments || [],
-        })),
-        { onConflict: "id" }
-      );
-      if (error) throw new Error(`Failed pushing Customers: ${error.message}`);
-      results.customers = db.customers.length;
+      if (db.customers.length > 0) {
+        const { error } = await supabase.from("customers").upsert(
+          db.customers.map(c => ({
+            id: c.id,
+            name: c.name,
+            phone: c.phone || null,
+            credit_limit: Number(c.creditLimit) || 0,
+            payments: (c.payments || []).filter(p => Number(p.amount) > 0),
+          })),
+          { onConflict: "id" }
+        );
+        if (error) throw new Error(`Failed pushing Customers: ${error.message}`);
+        results.customers = db.customers.length;
+      }
 
       // Clean up deleted customers if any
       try {
         const { data: remoteCustomers } = await supabase.from("customers").select("id");
         if (remoteCustomers && remoteCustomers.length > 0) {
-          const localCustIds = new Set(db.customers.map(c => c.id));
+          const localCustIds = new Set((db.customers || []).map(c => c.id));
           const toDelete = remoteCustomers.filter(r => !localCustIds.has(r.id)).map(r => r.id);
           if (toDelete.length > 0) {
             await supabase.from("customers").delete().in("id", toDelete);
@@ -235,53 +239,71 @@ export async function pushDatabaseToSupabase(db) {
   }
 
   // 5. Sales
-  if (db.sales && db.sales.length > 0) {
+  if (db.sales) {
     tasks.push((async () => {
-      const { error } = await supabase.from("sales").upsert(
-        db.sales.map(s => ({
-          id: s.id,
-          invoice_no: s.invoiceNo,
-          date: s.date,
-          time: s.time || null,
-          items: s.items || [],
-          total: Number(s.total) || 0,
-          cost: Number(s.cost) || 0,
-          profit: Number(s.profit) || 0,
-          payment: s.payment || "cash",
-          split_cash: s.splitCash ? Number(s.splitCash) : null,
-          customer_id: s.customerId || null,
-          employee: s.employee || "Staff",
-        })),
-        { onConflict: "invoice_no" }
-      );
-      if (error) throw new Error(`Failed pushing Sales: ${error.message}`);
-      results.sales = db.sales.length;
+      if (db.sales.length > 0) {
+        const { error } = await supabase.from("sales").upsert(
+          db.sales.map(s => ({
+            id: s.id,
+            invoice_no: s.invoiceNo,
+            date: s.date,
+            time: s.time || null,
+            items: s.items || [],
+            total: Number(s.total) || 0,
+            cost: Number(s.cost) || 0,
+            profit: Number(s.profit) || 0,
+            payment: s.payment || "cash",
+            split_cash: s.splitCash ? Number(s.splitCash) : null,
+            customer_id: s.customerId || null,
+            employee: s.employee || "Staff",
+          })),
+          { onConflict: "invoice_no" }
+        );
+        if (error) throw new Error(`Failed pushing Sales: ${error.message}`);
+        results.sales = db.sales.length;
+      }
+
+      // Clean up deleted sales if any
+      try {
+        const { data: remoteSales } = await supabase.from("sales").select("id, invoice_no");
+        if (remoteSales && remoteSales.length > 0) {
+          const localInvSet = new Set((db.sales || []).map(s => s.invoiceNo || s.id));
+          const toDelete = remoteSales.filter(r => !localInvSet.has(r.invoice_no) && !localInvSet.has(r.id)).map(r => r.id);
+          if (toDelete.length > 0) {
+            await supabase.from("sales").delete().in("id", toDelete);
+          }
+        }
+      } catch (cleanErr) {
+        console.warn("Sales deletion cleanup notice:", cleanErr);
+      }
     })());
   }
 
   // 6. Expenses
-  if (db.expenses && db.expenses.length > 0) {
+  if (db.expenses) {
     tasks.push((async () => {
-      const { error } = await supabase.from("expenses").upsert(
-        db.expenses.map(e => ({
-          id: e.id,
-          date: e.date,
-          category: e.category,
-          amount: Number(e.amount) || 0,
-          description: e.description || "",
-          payment: e.payment || "cash",
-          supplier_id: e.supplierId || null,
-        })),
-        { onConflict: "id" }
-      );
-      if (error) throw new Error(`Failed pushing Expenses: ${error.message}`);
-      results.expenses = db.expenses.length;
+      if (db.expenses.length > 0) {
+        const { error } = await supabase.from("expenses").upsert(
+          db.expenses.map(e => ({
+            id: e.id,
+            date: e.date,
+            category: e.category,
+            amount: Number(e.amount) || 0,
+            description: e.description || "",
+            payment: e.payment || "cash",
+            supplier_id: e.supplierId || null,
+          })),
+          { onConflict: "id" }
+        );
+        if (error) throw new Error(`Failed pushing Expenses: ${error.message}`);
+        results.expenses = db.expenses.length;
+      }
 
       // Clean up deleted expenses if any
       try {
         const { data: remoteExpenses } = await supabase.from("expenses").select("id");
         if (remoteExpenses && remoteExpenses.length > 0) {
-          const localExpIds = new Set(db.expenses.map(e => e.id));
+          const localExpIds = new Set((db.expenses || []).map(e => e.id));
           const toDelete = remoteExpenses.filter(r => !localExpIds.has(r.id)).map(r => r.id);
           if (toDelete.length > 0) {
             await supabase.from("expenses").delete().in("id", toDelete);
@@ -294,27 +316,29 @@ export async function pushDatabaseToSupabase(db) {
   }
 
   // 7. Quotations
-  if (db.quotations && db.quotations.length > 0) {
+  if (db.quotations) {
     tasks.push((async () => {
-      const { error } = await supabase.from("quotations").upsert(
-        db.quotations.map(q => ({
-          id: q.id,
-          number: q.number,
-          customer_id: q.customerId || null,
-          date: q.date,
-          status: q.status || "draft",
-          items: q.items || [],
-        })),
-        { onConflict: "number" }
-      );
-      if (error) throw new Error(`Failed pushing Quotations: ${error.message}`);
-      results.quotations = db.quotations.length;
+      if (db.quotations.length > 0) {
+        const { error } = await supabase.from("quotations").upsert(
+          db.quotations.map(q => ({
+            id: q.id,
+            number: q.number,
+            customer_id: q.customerId || null,
+            date: q.date,
+            status: q.status || "draft",
+            items: q.items || [],
+          })),
+          { onConflict: "number" }
+        );
+        if (error) throw new Error(`Failed pushing Quotations: ${error.message}`);
+        results.quotations = db.quotations.length;
+      }
 
       // Clean up deleted quotations if any
       try {
         const { data: remoteQuotations } = await supabase.from("quotations").select("id");
         if (remoteQuotations && remoteQuotations.length > 0) {
-          const localQuoteIds = new Set(db.quotations.map(q => q.id));
+          const localQuoteIds = new Set((db.quotations || []).map(q => q.id));
           const toDelete = remoteQuotations.filter(r => !localQuoteIds.has(r.id)).map(r => r.id);
           if (toDelete.length > 0) {
             await supabase.from("quotations").delete().in("id", toDelete);
@@ -327,23 +351,39 @@ export async function pushDatabaseToSupabase(db) {
   }
 
   // 8. Audit Log
-  if (db.auditLog && db.auditLog.length > 0) {
+  if (db.auditLog) {
     tasks.push((async () => {
-      const { error } = await supabase.from("audit_log").upsert(
-        db.auditLog.map(a => ({
-          id: a.id,
-          time: a.time,
-          user_name: a.user,
-          role: a.role || "Staff",
-          category: a.category || "General",
-          action: a.action,
-          detail: a.detail || null,
-          target: a.target || null,
-        })),
-        { onConflict: "id" }
-      );
-      if (error) throw new Error(`Failed pushing Audit Log: ${error.message}`);
-      results.auditLog = db.auditLog.length;
+      if (db.auditLog.length > 0) {
+        const { error } = await supabase.from("audit_log").upsert(
+          db.auditLog.map(a => ({
+            id: a.id,
+            time: a.time,
+            user_name: a.user,
+            role: a.role || "Staff",
+            category: a.category || "General",
+            action: a.action,
+            detail: a.detail || null,
+            target: a.target || null,
+          })),
+          { onConflict: "id" }
+        );
+        if (error) throw new Error(`Failed pushing Audit Log: ${error.message}`);
+        results.auditLog = db.auditLog.length;
+      }
+
+      // Clean up deleted audit logs if any
+      try {
+        const { data: remoteLogs } = await supabase.from("audit_log").select("id");
+        if (remoteLogs && remoteLogs.length > 0) {
+          const localLogIds = new Set((db.auditLog || []).map(l => l.id));
+          const toDelete = remoteLogs.filter(r => !localLogIds.has(r.id)).map(r => r.id);
+          if (toDelete.length > 0) {
+            await supabase.from("audit_log").delete().in("id", toDelete);
+          }
+        }
+      } catch (cleanErr) {
+        console.warn("Audit log deletion cleanup notice:", cleanErr);
+      }
     })());
   }
 
@@ -375,18 +415,27 @@ export async function pushDatabaseToSupabase(db) {
     })());
   }
 
-  // 10. System Settings (Sequences)
+  // 10. System Settings (Sequences & Security Action PIN)
   tasks.push(
     supabase.from("system_settings").upsert(
-      {
-        key: "sequences",
-        value: {
-          invoiceSeq: db.invoiceSeq || 454,
-          quoteSeq: db.quoteSeq || 1042,
-          poSeq: db.poSeq || 2046,
-          adjSeq: db.adjSeq || 1002,
+      [
+        {
+          key: "sequences",
+          value: {
+            invoiceSeq: db.invoiceSeq || 454,
+            quoteSeq: db.quoteSeq || 1042,
+            poSeq: db.poSeq || 2046,
+            adjSeq: db.adjSeq || 1002,
+          },
         },
-      },
+        {
+          key: "store_security",
+          value: {
+            actionPin: db?.settings?.actionPin || null,
+            updatedAt: new Date().toISOString(),
+          },
+        }
+      ],
       { onConflict: "key" }
     )
   );
@@ -437,8 +486,12 @@ export async function pullDatabaseFromSupabase() {
   if (quotationsRes.error) throw quotationsRes.error;
 
   const seqObj = settingsRes.data?.find(s => s.key === "sequences")?.value || {};
+  const secObj = settingsRes.data?.find(s => s.key === "store_security")?.value || {};
 
   return {
+    settings: {
+      actionPin: secObj?.actionPin || null,
+    },
     users: (usersRes.data || []).map(u => ({
       id: u.id,
       username: u.username,
