@@ -1113,3 +1113,152 @@ export function exportInvoicePDF({ sale, db, customInvoiceNo = null }) {
   doc.save(`Invoice-${resolvedInvoiceNo}.pdf`);
 }
 
+/**
+ * Export Comprehensive Customer Account Statement & Debt Ledger PDF
+ */
+export function exportCustomerStatementPDF({ customer, db }) {
+  const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  const pageWidth = doc.internal.pageSize.getWidth();
+
+  const custSales = (db.sales || []).filter(s => s.customerId === customer.id && (s.payment === "credit" || s.payment === "split"));
+  const allSales = (db.sales || []).filter(s => s.customerId === customer.id);
+  const payments = customer.payments || [];
+
+  const totalCreditPurchases = custSales.reduce((a, s) => a + (s.payment === "split" ? (Number(s.total) - (Number(s.splitCash) || 0)) : Number(s.total)), 0);
+  const totalRepaid = payments.reduce((a, p) => a + (Number(p.amount) || 0), 0);
+  const currentBalance = Math.max(0, totalCreditPurchases - totalRepaid);
+  const availableCredit = Math.max(0, (Number(customer.creditLimit) || 0) - currentBalance);
+
+  const dateStr = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+  addPDFHeader(doc, "Customer Account Statement", `Official Credit Ledger & Debt Settlement Statement as of ${dateStr}`);
+
+  // Customer Summary Card
+  const startY = 36;
+  const boxW = (pageWidth - 34) / 2;
+  const boxH = 26;
+
+  // Box 1: Customer Info
+  doc.setFillColor(248, 249, 251);
+  doc.roundedRect(14, startY, boxW, boxH, 2, 2, "F");
+  doc.setDrawColor(220, 224, 230);
+  doc.roundedRect(14, startY, boxW, boxH, 2, 2, "S");
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.5);
+  doc.setTextColor(110, 120, 130);
+  doc.text("CUSTOMER ACCOUNT", 18, startY + 6);
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10.5);
+  doc.setTextColor(30, 35, 42);
+  doc.text(customer.name, 18, startY + 13);
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.setTextColor(60, 70, 80);
+  doc.text(`Phone: ${customer.phone || "Not Recorded"}`, 18, startY + 19);
+
+  // Box 2: Financial Standing
+  doc.setFillColor(248, 249, 251);
+  doc.roundedRect(14 + boxW + 6, startY, boxW, boxH, 2, 2, "F");
+  doc.setDrawColor(220, 224, 230);
+  doc.roundedRect(14 + boxW + 6, startY, boxW, boxH, 2, 2, "S");
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.5);
+  doc.setTextColor(110, 120, 130);
+  doc.text("CREDIT & BALANCE STANDING", 18 + boxW + 6, startY + 6);
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.setTextColor(30, 35, 42);
+  doc.text(`Credit Limit: ${fmtCurrency(customer.creditLimit)}   |   Avail: ${fmtCurrency(availableCredit)}`, 18 + boxW + 6, startY + 13);
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10);
+  doc.setTextColor(currentBalance > 0 ? 193 : 47, currentBalance > 0 ? 58 : 128, currentBalance > 0 ? 46 : 80);
+  doc.text(`Current Outstanding Debt: ${fmtCurrency(currentBalance)}`, 18 + boxW + 6, startY + 20);
+
+  // Combined Ledger Entries (Sales + Repayments sorted by date)
+  const ledgerEntries = [];
+  allSales.forEach(s => {
+    const isCredit = s.payment === "credit" || s.payment === "split";
+    const debitAmount = s.payment === "split" ? (Number(s.total) - (Number(s.splitCash) || 0)) : (isCredit ? Number(s.total) : 0);
+    ledgerEntries.push({
+      date: s.date,
+      time: s.time || "",
+      ref: s.invoiceNo || s.id,
+      type: isCredit ? "Credit Purchase (Invoice)" : "Cash Purchase (POS)",
+      debit: debitAmount,
+      credit: 0,
+      notes: `${(s.items || []).length} item(s) · ${s.payment.toUpperCase()}`,
+    });
+  });
+
+  payments.forEach((p, idx) => {
+    ledgerEntries.push({
+      date: p.date,
+      time: p.time || "",
+      ref: p.reference ? `PAY-${p.reference}` : `REC-00${idx + 1}`,
+      type: "Debt Repayment",
+      debit: 0,
+      credit: Number(p.amount) || 0,
+      notes: `via ${(p.method || "CASH").toUpperCase()}${p.reference ? ` (${p.reference})` : ""}`,
+    });
+  });
+
+  // Sort chronological
+  ledgerEntries.sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
+
+  let runningBal = 0;
+  const tableBody = ledgerEntries.map((e, idx) => {
+    runningBal += (e.debit - e.credit);
+    return [
+      idx + 1,
+      niceDate(e.date),
+      e.ref,
+      e.type,
+      e.notes,
+      e.debit > 0 ? fmtCurrency(e.debit) : "—",
+      e.credit > 0 ? fmtCurrency(e.credit) : "—",
+      fmtCurrency(Math.max(0, runningBal)),
+    ];
+  });
+
+  autoTable(doc, {
+    startY: startY + boxH + 8,
+    head: [["#", "Date", "Reference", "Transaction Type", "Details / Mode", "Credit (Debt +)", "Paid (Credit -)", "Balance Due"]],
+    body: tableBody.length > 0 ? tableBody : [["—", "—", "—", "No credit sales or payment history recorded", "—", "—", "—", "KSh 0"]],
+    theme: "grid",
+    headStyles: {
+      fillColor: [32, 40, 52],
+      textColor: [255, 255, 255],
+      fontStyle: "bold",
+      fontSize: 8,
+      cellPadding: 2.5,
+    },
+    bodyStyles: {
+      fontSize: 7.5,
+      cellPadding: 2,
+      textColor: [30, 35, 42],
+    },
+    alternateRowStyles: {
+      fillColor: [248, 249, 251],
+    },
+    columnStyles: {
+      0: { cellWidth: 8, halign: "center" },
+      1: { cellWidth: 20 },
+      2: { cellWidth: 24, fontStyle: "bold" },
+      3: { cellWidth: 32 },
+      4: { cellWidth: 32 },
+      5: { cellWidth: 22, halign: "right", textColor: [193, 58, 46] },
+      6: { cellWidth: 22, halign: "right", textColor: [47, 128, 80] },
+      7: { cellWidth: 22, halign: "right", fontStyle: "bold" },
+    },
+    margin: { left: 14, right: 14 },
+  });
+
+  addPDFFooter(doc);
+  doc.save(`Statement-${customer.name.replace(/\s+/g, "_")}-${todayISO(0)}.pdf`);
+}
+

@@ -19,7 +19,8 @@ import {
   exportReorderListPDF,
   exportQuotationPDF,
   exportQuotationsListPDF,
-  exportInvoicePDF
+  exportInvoicePDF,
+  exportCustomerStatementPDF
 } from "./utils/pdfExport";
 import { ToastContainer } from "./components/Toast";
 import { LoginScreen, ForgotPasswordModal, ProfileModal, UserManagementModal } from "./components/Auth";
@@ -5882,15 +5883,31 @@ function CustomerDrawer({ customer, db, onPay, onDeletePayment, onDeleteCustomer
     setReference("");
   }
 
+  function handleDownloadStatement() {
+    exportCustomerStatementPDF({ customer, db });
+    notify("success", "Statement Exported", `Account ledger statement downloaded for ${customer.name}.`);
+  }
+
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(20,24,30,0.5)", display: "flex", justifyContent: "flex-end", zIndex: 1100 }} onClick={onClose}>
       <div className="hf-card" style={{ width: 460, maxWidth: "94vw", height: "100%", borderRadius: 0, overflowY: "auto", padding: 24, display: "flex", flexDirection: "column" }} onClick={e => e.stopPropagation()}>
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
           <div>
             <div className="disp" style={{ fontSize: 22, fontWeight: 700 }}>{customer.name}</div>
             <div style={{ fontSize: 12, color: "var(--ink-soft)" }}>{customer.phone || "No phone"}</div>
           </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer" }}><X size={18} /></button>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <button
+              type="button"
+              className="hf-btn hf-btn-ghost"
+              style={{ fontSize: 11.5, padding: "5px 8px" }}
+              onClick={handleDownloadStatement}
+              title="Download Customer Account Statement PDF"
+            >
+              <Download size={13} /> Statement PDF
+            </button>
+            <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)" }}><X size={18} /></button>
+          </div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 18 }}>
           <Stat label="Credit Limit" value={fmt(customer.creditLimit)} />
