@@ -277,9 +277,9 @@ function buildSeed() {
   ];
 
   const customers = [
-    { id: "c1", name: "ABC Construction Ltd", phone: "0722 555 111", creditLimit: 500000, payments: [{ date: todayISO(-12), amount: 100000 }, { date: todayISO(0), amount: 25000 }] },
-    { id: "c2", name: "John Builders", phone: "0733 555 222", creditLimit: 100000, payments: [{ date: todayISO(-3), amount: 20000 }] },
-    { id: "c3", name: "XYZ Contractors", phone: "0711 555 333", creditLimit: 150000, payments: [{ date: todayISO(-40), amount: 15000 }] },
+    { id: "c1", name: "ABC Construction Ltd", phone: "0722 555 111", creditLimit: 500000, payments: [{ date: todayISO(-12), amount: 100000 }, { date: todayISO(0), amount: 25000 }, { date: todayISO(0), amount: 62500 }] },
+    { id: "c2", name: "John Builders", phone: "0733 555 222", creditLimit: 100000, payments: [{ date: todayISO(-3), amount: 20000 }, { date: todayISO(0), amount: 20000 }] },
+    { id: "c3", name: "XYZ Contractors", phone: "0711 555 333", creditLimit: 150000, payments: [{ date: todayISO(-40), amount: 15000 }, { date: todayISO(-1), amount: 15600 }, { date: todayISO(0), amount: 42000 }] },
   ];
 
   const sales = [
@@ -354,67 +354,66 @@ function useDB() {
   });
 
   const [loading] = useState(false);
-  const isInitialCloudSync = useRef(false);
+  const isCloudInitialized = useRef(false);
 
   // 1. Initial background cloud pull on app launch & automatic cryptographic password migration
   useEffect(() => {
-    if (!isInitialCloudSync.current && db) {
-      isInitialCloudSync.current = true;
-      (async () => {
-        try {
-          const cloudDb = await pullDatabaseFromSupabase();
-          const hasCloudData = cloudDb && (
-            (cloudDb.products && cloudDb.products.length > 0) ||
-            (cloudDb.sales && cloudDb.sales.length > 0) ||
-            (cloudDb.customers && cloudDb.customers.length > 0) ||
-            (cloudDb.expenses && cloudDb.expenses.length > 0)
-          );
+    (async () => {
+      try {
+        const cloudDb = await pullDatabaseFromSupabase();
+        const hasCloudData = cloudDb && (
+          (cloudDb.products && cloudDb.products.length > 0) ||
+          (cloudDb.sales && cloudDb.sales.length > 0) ||
+          (cloudDb.customers && cloudDb.customers.length > 0) ||
+          (cloudDb.expenses && cloudDb.expenses.length > 0)
+        );
 
-          let targetDb = db;
-          if (hasCloudData) {
-            targetDb = cloudDb;
-          }
-
-          // Check if any users have unhashed legacy passwords or pins, and ensure owner recovery PIN is 7868
-          let needsMigration = false;
-          const upgradedUsers = await Promise.all(
-            (targetDb.users || []).map(async (u) => {
-              let updated = { ...u };
-              if (u.password && !u.password.startsWith("pbkdf2:")) {
-                updated.password = await hashPassword(u.password);
-                needsMigration = true;
-              }
-              if (u.role === "owner" || u.username.toLowerCase() === "owner") {
-                const { valid: is7868 } = await verifyPassword("7868", u.pin || "");
-                if (!is7868) {
-                  updated.pin = await hashPassword("7868");
-                  needsMigration = true;
-                }
-              } else if (u.pin && !u.pin.startsWith("pbkdf2:")) {
-                updated.pin = await hashPassword(u.pin);
-                needsMigration = true;
-              }
-              return updated;
-            })
-          );
-
-          if (needsMigration) {
-            targetDb = { ...targetDb, users: upgradedUsers };
-            console.log("[HardwareFlow Security] Upgraded credentials to salted PBKDF2-SHA256 hashes.");
-          }
-
-          setDb(targetDb);
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(targetDb));
-
-          if (!hasCloudData || needsMigration) {
-            autoSyncDatabase(targetDb, 0);
-          }
-        } catch (err) {
-          console.warn("[HardwareFlow] Initial Supabase cloud fetch notice:", err.message || err);
+        let targetDb = db;
+        if (hasCloudData) {
+          targetDb = cloudDb;
         }
-      })();
-    }
-  }, [db]);
+
+        // Check if any users have unhashed legacy passwords or pins, and ensure owner recovery PIN is 7868
+        let needsMigration = false;
+        const upgradedUsers = await Promise.all(
+          (targetDb.users || []).map(async (u) => {
+            let updated = { ...u };
+            if (u.password && !u.password.startsWith("pbkdf2:")) {
+              updated.password = await hashPassword(u.password);
+              needsMigration = true;
+            }
+            if (u.role === "owner" || u.username.toLowerCase() === "owner") {
+              const { valid: is7868 } = await verifyPassword("7868", u.pin || "");
+              if (!is7868) {
+                updated.pin = await hashPassword("7868");
+                needsMigration = true;
+              }
+            } else if (u.pin && !u.pin.startsWith("pbkdf2:")) {
+              updated.pin = await hashPassword(u.pin);
+              needsMigration = true;
+            }
+            return updated;
+          })
+        );
+
+        if (needsMigration) {
+          targetDb = { ...targetDb, users: upgradedUsers };
+          console.log("[HardwareFlow Security] Upgraded credentials to salted PBKDF2-SHA256 hashes.");
+        }
+
+        isCloudInitialized.current = true;
+        setDb(targetDb);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(targetDb));
+
+        if (!hasCloudData || needsMigration) {
+          autoSyncDatabase(targetDb, 0);
+        }
+      } catch (err) {
+        console.warn("[HardwareFlow] Initial Supabase cloud fetch notice:", err.message || err);
+        isCloudInitialized.current = true;
+      }
+    })();
+  }, []);
 
   // 2. Persist locally and push updates to Supabase immediately in real-time
   useEffect(() => {
@@ -424,8 +423,10 @@ function useDB() {
     } catch (error) {
       console.error("Failed to save HardwareFlow data to localStorage:", error);
     }
-    // Push immediately to Supabase in real-time
-    autoSyncDatabase(db, 50);
+    // Push immediately to Supabase in real-time only after initial cloud resolution
+    if (isCloudInitialized.current) {
+      autoSyncDatabase(db, 50);
+    }
   }, [db]);
 
   // 3. Realtime Supabase Subscription: Listen for changes from other sessions/cloud
@@ -4753,11 +4754,12 @@ function Field({ label, help, children }) {
   );
 }
 
-/* ================= RECEIVING ================= */
+/* ================= RECEIVING & DELIVERY LOGS ================= */
 function Receiving({ db, setDb, notify, currentUser, prefill, onClearPrefill }) {
+  const [activeTab, setActiveTab] = useState("receive"); // "receive" | "history"
   const [supplierId, setSupplierId] = useState(() => prefill?.supplierId || db.suppliers[0]?.id || "");
   const [invoiceRef, setInvoiceRef] = useState("");
-  const [paymentMode, setPaymentMode] = useState("credit"); // "credit" | "cash" | "mpesa"
+  const [paymentMode, setPaymentMode] = useState("credit"); // "credit" | "cash" | "mpesa" | "bank"
   const [lines, setLines] = useState(() => {
     if (prefill?.productId) {
       const p = (db.products || []).find(prod => prod.id === prefill.productId);
@@ -4771,6 +4773,14 @@ function Receiving({ db, setDb, notify, currentUser, prefill, onClearPrefill }) 
   });
   const [done, setDone] = useState(false);
 
+  // Store PIN Verification Modal for Deletions
+  const [pinModal, setPinModal] = useState({
+    isOpen: false,
+    title: "",
+    description: "",
+    onSuccess: () => {},
+  });
+
   useEffect(() => {
     if (prefill?.productId) {
       if (prefill.supplierId) setSupplierId(prefill.supplierId);
@@ -4780,6 +4790,7 @@ function Receiving({ db, setDb, notify, currentUser, prefill, onClearPrefill }) 
         qty: prefill.qty ? String(prefill.qty) : "1",
         buyPrice: p ? String(p.buyPrice) : ""
       }]);
+      setActiveTab("receive");
       if (typeof onClearPrefill === "function") onClearPrefill();
     }
   }, [prefill, db.products, onClearPrefill]);
@@ -4914,6 +4925,112 @@ function Receiving({ db, setDb, notify, currentUser, prefill, onClearPrefill }) 
     setDone(true);
   }
 
+  /* ---------- Delete Individual Delivery (Reverses Stock & Voids PO) ---------- */
+  function handleDeleteDelivery(poToDelete) {
+    setPinModal({
+      isOpen: true,
+      title: "Authorize Delete Delivery Record",
+      description: `Enter Store Security PIN to remove delivery ${poToDelete.poNumber} (${fmt(poToDelete.total)}) and deduct the received quantities from store stock.`,
+      onSuccess: () => {
+        const today = todayISO(0);
+        const timeStr = new Date().toTimeString().slice(0, 5);
+        const operator = currentUser?.name || "Staff";
+
+        setDb(prev => {
+          // Deduct the delivered quantities from product stock
+          const products = prev.products.map(p => {
+            const line = (poToDelete.items || []).find(i => i.productId === p.id);
+            if (!line) return p;
+            const deductQty = (Number(line.qty) || 0) * (Number(p.conversionFactor) || 1);
+            const newStock = Math.max(0, (Number(p.stock) || 0) - deductQty);
+            return {
+              ...p,
+              stock: newStock,
+              history: [
+                ...(p.history || []),
+                {
+                  id: uid("H"),
+                  date: today,
+                  time: timeStr,
+                  action: "Delivery Voided (Stock Deducted)",
+                  ref: poToDelete.poNumber,
+                  qty: -deductQty,
+                  balance: newStock,
+                  user: operator,
+                  reason: `Delivery ${poToDelete.poNumber} removed — Stock reverted`,
+                }
+              ]
+            };
+          });
+
+          const updatedPurchases = (prev.purchases || []).filter(p => p.id !== poToDelete.id && p.poNumber !== poToDelete.poNumber);
+
+          return {
+            ...prev,
+            products,
+            purchases: updatedPurchases,
+            auditLog: [
+              {
+                id: uid("LOG"),
+                time: `${today} ${timeStr}`,
+                user: operator,
+                role: currentUser?.role || "Storekeeper",
+                category: "Stock Delivery Voided",
+                action: `Deleted delivery ${poToDelete.poNumber} (${fmt(poToDelete.total)})`,
+                detail: `Deducted stock for ${(poToDelete.items || []).length} item(s) — Verified via Store PIN`,
+                target: poToDelete.poNumber,
+              },
+              ...(prev.auditLog || [])
+            ]
+          };
+        });
+
+        notify("success", "Delivery Removed", `Delivery ${poToDelete.poNumber} deleted and stock balances were reversed.`);
+        setPinModal({ isOpen: false, title: "", description: "", onSuccess: () => {} });
+      }
+    });
+  }
+
+  /* ---------- Clear All Deliveries with PIN ---------- */
+  function handleClearAllDeliveries() {
+    if ((db.purchases || []).length === 0) {
+      notify("info", "No Deliveries", "Delivery history is already empty.");
+      return;
+    }
+
+    setPinModal({
+      isOpen: true,
+      title: "Authorize Clear All Deliveries",
+      description: `WARNING: Enter Store Security PIN to permanently delete all ${db.purchases.length} stock delivery records. Note: Existing on-hand stock quantities will be preserved.`,
+      onSuccess: () => {
+        const today = todayISO(0);
+        const timeStr = new Date().toTimeString().slice(0, 5);
+        const operator = currentUser?.name || "Owner";
+
+        setDb(prev => ({
+          ...prev,
+          purchases: [],
+          auditLog: [
+            {
+              id: uid("LOG"),
+              time: `${today} ${timeStr}`,
+              user: operator,
+              role: currentUser?.role || "Owner",
+              category: "Bulk Delivery Deletion",
+              action: `Cleared all delivery records (${(prev.purchases || []).length} deliveries removed)`,
+              detail: `Delivery ledger wiped — Verified via Store PIN`,
+              target: "All Deliveries",
+            },
+            ...(prev.auditLog || [])
+          ]
+        }));
+
+        notify("success", "All Deliveries Cleared", "All stock delivery records have been deleted.");
+        setPinModal({ isOpen: false, title: "", description: "", onSuccess: () => {} });
+      }
+    });
+  }
+
   if (done) {
     return (
       <div className="hf-card" style={{ padding: 32, maxWidth: 440, margin: "40px auto", textAlign: "center" }}>
@@ -4922,93 +5039,222 @@ function Receiving({ db, setDb, notify, currentUser, prefill, onClearPrefill }) 
         <div style={{ color: "var(--ink-soft)", fontSize: 13, marginTop: 4 }}>
           Inventory levels and cost records updated.
         </div>
-        <button
-          className="hf-btn hf-btn-primary"
-          style={{ marginTop: 18 }}
-          onClick={() => { setDone(false); setLines([{ productId: "", qty: "", buyPrice: "" }]); setInvoiceRef(""); }}
-        >
-          Receive Another Delivery
-        </button>
+        <div style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 18 }}>
+          <button
+            className="hf-btn hf-btn-ghost"
+            onClick={() => { setDone(false); setActiveTab("history"); }}
+          >
+            <History size={14} /> View Delivery Log
+          </button>
+          <button
+            className="hf-btn hf-btn-primary"
+            onClick={() => { setDone(false); setLines([{ productId: "", qty: "", buyPrice: "" }]); setInvoiceRef(""); }}
+          >
+            <Plus size={14} /> Receive Another Delivery
+          </button>
+        </div>
       </div>
     );
   }
 
   return (
     <div>
-      <div className="disp" style={{ fontSize: 26, fontWeight: 700, marginBottom: 4 }}>Receive Stock Delivery</div>
-      <div style={{ color: "var(--ink-soft)", fontSize: 13, marginBottom: 14 }}>
-        Log incoming stock shipments from suppliers and automatically update on-hand quantities & buying costs.
-      </div>
-      <div className="hf-card" style={{ maxWidth: 660, padding: 22 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
-          <Field label="Supplier *">
-            <select className="hf-input" value={supplierId} onChange={e => setSupplierId(e.target.value)}>
-              {db.suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
-          </Field>
-          <Field label="Supplier Invoice / Delivery Note # (Optional)">
-            <input className="hf-input" placeholder="e.g. BAM-INV-9921" value={invoiceRef} onChange={e => setInvoiceRef(e.target.value)} />
-          </Field>
-        </div>
+      <PinVerificationModal
+        isOpen={pinModal.isOpen}
+        title={pinModal.title}
+        description={pinModal.description}
+        onSuccess={pinModal.onSuccess}
+        onCancel={() => setPinModal({ isOpen: false, title: "", description: "", onSuccess: () => {} })}
+        db={db}
+      />
 
-        {/* Payment Terms for Delivery */}
-        <div style={{ marginTop: 12, marginBottom: 6 }}>
-          <div className="hf-kpi-label" style={{ marginBottom: 4 }}>Payment for Delivery</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 6 }}>
-            {[
-              { key: "credit", label: "On Credit" },
-              { key: "cash", label: "Paid Cash" },
-              { key: "mpesa", label: "Paid M-Pesa" },
-              { key: "bank", label: "Paid via Bank" },
-            ].map(m => {
-              const isSelected = paymentMode === m.key;
-              return (
-                <button
-                  key={m.key}
-                  type="button"
-                  onClick={() => setPaymentMode(m.key)}
-                  className="hf-btn"
-                  style={{
-                    justifyContent: "center",
-                    background: isSelected ? "var(--rust)" : "var(--surface-hover)",
-                    color: isSelected ? "#FFFFFF" : "var(--ink)",
-                    border: isSelected ? "1.5px solid var(--rust-dark)" : "1.5px solid var(--line)",
-                    fontWeight: isSelected ? 700 : 500,
-                    fontSize: 12,
-                  }}
-                >
-                  {isSelected ? "✓ " : ""}{m.label}
-                </button>
-              );
-            })}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <div className="disp" style={{ fontSize: 26, fontWeight: 700, marginBottom: 2 }}>Receive Stock Deliveries</div>
+          <div style={{ color: "var(--ink-soft)", fontSize: 13 }}>
+            Log incoming supplier shipments, track purchase orders, and update stock counts automatically.
           </div>
         </div>
 
-        <div className="hf-kpi-label" style={{ margin: "16px 0 6px" }}>Items Received</div>
-        {lines.map((l, i) => {
-          const prod = db.products.find(p => p.id === l.productId);
-          return (
-            <div key={i} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr auto", gap: 8, marginBottom: 8, alignItems: "center" }}>
-              <select className="hf-input" value={l.productId} onChange={e => updateLine(i, "productId", e.target.value)}>
-                <option value="">Select product…</option>
-                {db.products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
-              <input className="hf-input" type="number" placeholder={prod ? `Qty (${prod.purchaseUnit})` : "Qty"} value={l.qty} onChange={e => updateLine(i, "qty", e.target.value)} />
-              <input className="hf-input" type="number" placeholder={prod ? `Buy price (${fmt(prod.buyPrice)})` : "Buy price"} value={l.buyPrice} onChange={e => updateLine(i, "buyPrice", e.target.value)} />
-              <button onClick={() => removeLine(i)} style={{ background: "none", border: "none", cursor: "pointer" }}><Trash2 size={15} color="var(--red)" /></button>
-            </div>
-          );
-        })}
-        <button className="hf-btn hf-btn-ghost" onClick={addLine}><Plus size={14} /> Add Product Line</button>
+        {/* Tab Switcher & Clear Deliveries button */}
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={{ display: "flex", background: "var(--surface-hover)", padding: 3, borderRadius: 10, border: "1px solid var(--line)" }}>
+            <button
+              type="button"
+              onClick={() => setActiveTab("receive")}
+              className="hf-btn"
+              style={{
+                fontSize: 12,
+                padding: "6px 12px",
+                background: activeTab === "receive" ? "var(--rust)" : "transparent",
+                color: activeTab === "receive" ? "#fff" : "var(--ink)",
+                borderRadius: 7,
+              }}
+            >
+              <Truck size={14} /> Log Delivery
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("history")}
+              className="hf-btn"
+              style={{
+                fontSize: 12,
+                padding: "6px 12px",
+                background: activeTab === "history" ? "var(--rust)" : "transparent",
+                color: activeTab === "history" ? "#fff" : "var(--ink)",
+                borderRadius: 7,
+              }}
+            >
+              <History size={14} /> Delivery Log ({(db.purchases || []).length})
+            </button>
+          </div>
 
-        <div style={{ borderTop: "1.5px dashed var(--line)", marginTop: 16, paddingTop: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div style={{ fontSize: 13, color: "var(--ink-soft)" }}>Total Delivery Value:</div>
-          <div className="mono text-profit" style={{ fontSize: 20, fontWeight: 700 }}>{fmt(total)}</div>
+          {activeTab === "history" && (db.purchases || []).length > 0 && (
+            <button
+              type="button"
+              className="hf-btn hf-btn-ghost"
+              style={{ color: "var(--red)", borderColor: "var(--red)" }}
+              onClick={handleClearAllDeliveries}
+              title="Delete all delivery records (Requires PIN)"
+            >
+              <Trash2 size={13} /> Clear All Deliveries
+            </button>
+          )}
         </div>
-        <button className="hf-btn hf-btn-primary" style={{ width: "100%", justifyContent: "center", marginTop: 14, padding: 12 }} onClick={receive} disabled={validLines.length === 0}>
-          <Truck size={16} /> Confirm and Receive Stock
-        </button>
       </div>
+
+      {activeTab === "receive" ? (
+        <div className="hf-card" style={{ maxWidth: 660, padding: 22 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+            <Field label="Supplier *">
+              <select className="hf-input" value={supplierId} onChange={e => setSupplierId(e.target.value)}>
+                {db.suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </Field>
+            <Field label="Supplier Invoice / Delivery Note # (Optional)">
+              <input className="hf-input" placeholder="e.g. BAM-INV-9921" value={invoiceRef} onChange={e => setInvoiceRef(e.target.value)} />
+            </Field>
+          </div>
+
+          {/* Payment Terms for Delivery */}
+          <div style={{ marginTop: 12, marginBottom: 6 }}>
+            <div className="hf-kpi-label" style={{ marginBottom: 4 }}>Payment for Delivery</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 6 }}>
+              {[
+                { key: "credit", label: "On Credit" },
+                { key: "cash", label: "Paid Cash" },
+                { key: "mpesa", label: "Paid M-Pesa" },
+                { key: "bank", label: "Paid via Bank" },
+              ].map(m => {
+                const isSelected = paymentMode === m.key;
+                return (
+                  <button
+                    key={m.key}
+                    type="button"
+                    onClick={() => setPaymentMode(m.key)}
+                    className="hf-btn"
+                    style={{
+                      justifyContent: "center",
+                      background: isSelected ? "var(--rust)" : "var(--surface-hover)",
+                      color: isSelected ? "#FFFFFF" : "var(--ink)",
+                      border: isSelected ? "1.5px solid var(--rust-dark)" : "1.5px solid var(--line)",
+                      fontWeight: isSelected ? 700 : 500,
+                      fontSize: 12,
+                    }}
+                  >
+                    {isSelected ? "✓ " : ""}{m.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="hf-kpi-label" style={{ margin: "16px 0 6px" }}>Items Received</div>
+          {lines.map((l, i) => {
+            const prod = db.products.find(p => p.id === l.productId);
+            return (
+              <div key={i} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr auto", gap: 8, marginBottom: 8, alignItems: "center" }}>
+                <select className="hf-input" value={l.productId} onChange={e => updateLine(i, "productId", e.target.value)}>
+                  <option value="">Select product…</option>
+                  {db.products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+                <input className="hf-input" type="number" placeholder={prod ? `Qty (${prod.purchaseUnit})` : "Qty"} value={l.qty} onChange={e => updateLine(i, "qty", e.target.value)} />
+                <input className="hf-input" type="number" placeholder={prod ? `Buy price (${fmt(prod.buyPrice)})` : "Buy price"} value={l.buyPrice} onChange={e => updateLine(i, "buyPrice", e.target.value)} />
+                <button onClick={() => removeLine(i)} style={{ background: "none", border: "none", cursor: "pointer" }}><Trash2 size={15} color="var(--red)" /></button>
+              </div>
+            );
+          })}
+          <button className="hf-btn hf-btn-ghost" onClick={addLine}><Plus size={14} /> Add Product Line</button>
+
+          <div style={{ borderTop: "1.5px dashed var(--line)", marginTop: 16, paddingTop: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ fontSize: 13, color: "var(--ink-soft)" }}>Total Delivery Value:</div>
+            <div className="mono text-profit" style={{ fontSize: 20, fontWeight: 700 }}>{fmt(total)}</div>
+          </div>
+          <button className="hf-btn hf-btn-primary" style={{ width: "100%", justifyContent: "center", marginTop: 14, padding: 12 }} onClick={receive} disabled={validLines.length === 0}>
+            <Truck size={16} /> Confirm and Receive Stock
+          </button>
+        </div>
+      ) : (
+        /* Delivery Log Table */
+        <div className="hf-card">
+          <table className="hf-table">
+            <thead>
+              <tr>
+                <th>Date & Time</th>
+                <th>PO # / Delivery Ref</th>
+                <th>Supplier</th>
+                <th>Items Received</th>
+                <th>Payment Mode</th>
+                <th style={{ textAlign: "right" }}>Total Value</th>
+                <th style={{ width: 60, textAlign: "right" }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {(db.purchases || []).map(p => (
+                <tr key={p.id}>
+                  <td>
+                    <div style={{ fontWeight: 600 }}>{niceDate(p.date)}</div>
+                    {p.time && <div style={{ fontSize: 11, color: "var(--ink-soft)" }}>{p.time}</div>}
+                  </td>
+                  <td>
+                    <span className="mono" style={{ fontWeight: 700 }}>{p.poNumber}</span>
+                  </td>
+                  <td style={{ fontWeight: 600 }}>{p.supplierName || "Supplier"}</td>
+                  <td style={{ fontSize: 12, color: "var(--ink-soft)", maxWidth: 280 }}>
+                    {(p.items || []).map(it => `${it.qty} × ${it.productName}`).join(", ") || p.notes || "Stock delivery"}
+                  </td>
+                  <td>
+                    <Pill tone={p.payment === "credit" ? "amber" : "green"}>
+                      {p.payment ? String(p.payment).toUpperCase() : "PAID"}
+                    </Pill>
+                  </td>
+                  <td className="mono text-profit" style={{ textAlign: "right", fontWeight: 700 }}>
+                    {fmt(p.total)}
+                  </td>
+                  <td style={{ textAlign: "right" }}>
+                    <button
+                      type="button"
+                      className="hf-btn hf-btn-ghost"
+                      style={{ padding: "4px 7px", color: "var(--red)" }}
+                      onClick={() => handleDeleteDelivery(p)}
+                      title="Delete delivery and deduct received stock (Requires PIN)"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {(db.purchases || []).length === 0 && (
+                <tr>
+                  <td colSpan={7} style={{ textAlign: "center", padding: 28, color: "var(--ink-soft)" }}>
+                    No stock deliveries recorded yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -6033,6 +6279,71 @@ function Customers({ db, setDb, notify, currentUser }) {
     });
   }
 
+  /* ---------- Settle All Outstanding Customer Debts with PIN ---------- */
+  function handleSettleAllDebts() {
+    const debtors = withBal.filter(c => c.balance > 0);
+    if (debtors.length === 0) {
+      notify("info", "All Debts Settled", "All customer accounts are already fully settled (KSh 0 debt).");
+      return;
+    }
+
+    const totalOutstanding = debtors.reduce((a, c) => a + c.balance, 0);
+
+    setPinModal({
+      isOpen: true,
+      title: "Authorize Settle All Customer Debts",
+      description: `WARNING: Enter Store Security PIN to record full settlement payments across all ${debtors.length} customer debtor accounts (${fmt(totalOutstanding)} total). This will reset all customer debts to KSh 0 immediately.`,
+      onSuccess: () => {
+        const today = todayISO(0);
+        const timeStr = new Date().toTimeString().slice(0, 5);
+        const operator = currentUser?.name || "Owner";
+
+        setDb(prev => {
+          const updatedCustomers = (prev.customers || []).map(c => {
+            const bal = customerBalance(prev, c.id);
+            if (bal <= 0) return c;
+            return {
+              ...c,
+              payments: [
+                ...(c.payments || []),
+                {
+                  id: uid("PAY"),
+                  date: today,
+                  time: timeStr,
+                  amount: bal,
+                  method: "cash",
+                  reference: "Full Debt Settlement",
+                  user: operator,
+                }
+              ]
+            };
+          });
+
+          return {
+            ...prev,
+            customers: updatedCustomers,
+            auditLog: [
+              {
+                id: uid("LOG"),
+                time: `${today} ${timeStr}`,
+                user: operator,
+                role: currentUser?.role || "Owner",
+                category: "Customer Payment",
+                action: `Settled all customer debt balances (${debtors.length} accounts, ${fmt(totalOutstanding)})`,
+                detail: `Cleared all outstanding customer credit to KSh 0 — Verified via Store PIN`,
+                target: "All Customer Debts",
+              },
+              ...(prev.auditLog || [])
+            ]
+          };
+        });
+
+        notify("success", "All Debts Settled", `All customer balances have been settled to KSh 0.`);
+        setPinModal({ isOpen: false, title: "", description: "", onSuccess: () => {} });
+      }
+    });
+  }
+
   function handleSaveNewCustomer(newCust) {
     setDb(prev => ({
       ...prev,
@@ -6076,7 +6387,18 @@ function Customers({ db, setDb, notify, currentUser }) {
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {totalDebt > 0 && (
+            <button
+              type="button"
+              className="hf-btn hf-btn-ghost"
+              style={{ color: "var(--green)", borderColor: "var(--green)" }}
+              onClick={handleSettleAllDebts}
+              title="Settle all customer debts to KSh 0 (Requires PIN)"
+            >
+              <Coins size={14} /> Settle All Debts
+            </button>
+          )}
           <button
             type="button"
             className="hf-btn hf-btn-ghost"
@@ -6437,6 +6759,14 @@ function Quotations({ db, setDb, notify, currentUser }) {
   const [creating, setCreating] = useState(false);
   const [viewing, setViewing] = useState(null);
 
+  // Store PIN Verification Modal
+  const [pinModal, setPinModal] = useState({
+    isOpen: false,
+    title: "",
+    description: "",
+    onSuccess: () => {},
+  });
+
   function convert(q) {
     const items = q.items.map(i => {
       const prod = db.products.find(p => p.id === i.productId);
@@ -6523,8 +6853,94 @@ function Quotations({ db, setDb, notify, currentUser }) {
     setViewing(null);
   }
 
+  /* ---------- Delete Individual Quotation with PIN ---------- */
+  function handleDeleteQuotation(quoteToDelete) {
+    setPinModal({
+      isOpen: true,
+      title: "Authorize Delete Quotation",
+      description: `Enter Store Security PIN to permanently delete quotation ${quoteToDelete.number}.`,
+      onSuccess: () => {
+        const today = todayISO(0);
+        const timeStr = new Date().toTimeString().slice(0, 5);
+        const operator = currentUser?.name || "Staff";
+
+        setDb(prev => ({
+          ...prev,
+          quotations: (prev.quotations || []).filter(q => q.id !== quoteToDelete.id && q.number !== quoteToDelete.number),
+          auditLog: [
+            {
+              id: uid("LOG"),
+              time: `${today} ${timeStr}`,
+              user: operator,
+              role: currentUser?.role || "Staff",
+              category: "Quotation Deleted",
+              action: `Deleted quotation ${quoteToDelete.number}`,
+              detail: `Quotation removed — Verified via Store PIN`,
+              target: quoteToDelete.number,
+            },
+            ...(prev.auditLog || [])
+          ]
+        }));
+
+        notify("success", "Quotation Deleted", `Quotation ${quoteToDelete.number} has been removed.`);
+        if (viewing?.id === quoteToDelete.id) setViewing(null);
+        setPinModal({ isOpen: false, title: "", description: "", onSuccess: () => {} });
+      }
+    });
+  }
+
+  /* ---------- Clear All Quotations with PIN ---------- */
+  function handleClearAllQuotations() {
+    if ((db.quotations || []).length === 0) {
+      notify("info", "No Quotations", "Quotations list is already empty.");
+      return;
+    }
+
+    setPinModal({
+      isOpen: true,
+      title: "Authorize Clear All Quotations",
+      description: `WARNING: Enter Store Security PIN to permanently delete all ${db.quotations.length} saved customer quotations.`,
+      onSuccess: () => {
+        const today = todayISO(0);
+        const timeStr = new Date().toTimeString().slice(0, 5);
+        const operator = currentUser?.name || "Owner";
+
+        setDb(prev => ({
+          ...prev,
+          quotations: [],
+          auditLog: [
+            {
+              id: uid("LOG"),
+              time: `${today} ${timeStr}`,
+              user: operator,
+              role: currentUser?.role || "Owner",
+              category: "Bulk Quotation Deletion",
+              action: `Cleared all quotations (${(prev.quotations || []).length} quotations removed)`,
+              detail: `Quotations registry cleared — Verified via Store PIN`,
+              target: "All Quotations",
+            },
+            ...(prev.auditLog || [])
+          ]
+        }));
+
+        notify("success", "All Quotations Cleared", "All quotation records have been removed.");
+        setViewing(null);
+        setPinModal({ isOpen: false, title: "", description: "", onSuccess: () => {} });
+      }
+    });
+  }
+
   return (
     <div>
+      <PinVerificationModal
+        isOpen={pinModal.isOpen}
+        title={pinModal.title}
+        description={pinModal.description}
+        onSuccess={pinModal.onSuccess}
+        onCancel={() => setPinModal({ isOpen: false, title: "", description: "", onSuccess: () => {} })}
+        db={db}
+      />
+
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
         <div>
           <div className="disp" style={{ fontSize: 26, fontWeight: 700 }}>Quotations</div>
@@ -6532,7 +6948,18 @@ function Quotations({ db, setDb, notify, currentUser }) {
             Prepare formal price quotes, export branded customer PDF quotations, and convert approved quotes to sales.
           </div>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {(db.quotations || []).length > 0 && (
+            <button
+              type="button"
+              className="hf-btn hf-btn-ghost"
+              style={{ color: "var(--red)", borderColor: "var(--red)" }}
+              onClick={handleClearAllQuotations}
+              title="Delete all quotations (Requires PIN)"
+            >
+              <Trash2 size={14} /> Clear All Quotations
+            </button>
+          )}
           <button
             type="button"
             className="hf-btn hf-btn-ghost"
@@ -6590,6 +7017,15 @@ function Quotations({ db, setDb, notify, currentUser }) {
                       >
                         <Download size={12} /> PDF
                       </button>
+                      <button
+                        type="button"
+                        className="hf-btn hf-btn-ghost"
+                        style={{ padding: "4px 6px", color: "var(--red)" }}
+                        onClick={() => handleDeleteQuotation(q)}
+                        title="Delete quotation (Requires PIN)"
+                      >
+                        <Trash2 size={13} />
+                      </button>
                       <ChevronRight size={15} color="var(--ink-soft)" />
                     </div>
                   </td>
@@ -6633,22 +7069,32 @@ function Quotations({ db, setDb, notify, currentUser }) {
               <span>Total Quotation</span>
               <span className="mono text-profit" style={{ fontSize: 16 }}>{fmt((viewing.items || []).reduce((a,i)=>a+i.unitPrice*i.qty,0))}</span>
             </div>
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <div style={{ display: "flex", gap: 8, justifyContent: "space-between", flexWrap: "wrap" }}>
               <button
                 type="button"
                 className="hf-btn hf-btn-ghost"
-                onClick={() => {
-                  exportQuotationPDF({ quote: viewing, db });
-                  notify("success", "Quotation PDF Downloaded", `Saved ${viewing.number}.`);
-                }}
+                style={{ color: "var(--red)", borderColor: "var(--red-tint)" }}
+                onClick={() => handleDeleteQuotation(viewing)}
               >
-                <Download size={14} /> Download PDF
+                <Trash2 size={14} /> Delete
               </button>
-              {viewing.status !== "converted" && (
-                <button className="hf-btn hf-btn-primary" onClick={() => convert(viewing)}>
-                  <ArrowRight size={14} /> Convert to Sale
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  type="button"
+                  className="hf-btn hf-btn-ghost"
+                  onClick={() => {
+                    exportQuotationPDF({ quote: viewing, db });
+                    notify("success", "Quotation PDF Downloaded", `Saved ${viewing.number}.`);
+                  }}
+                >
+                  <Download size={14} /> Download PDF
                 </button>
-              )}
+                {viewing.status !== "converted" && (
+                  <button className="hf-btn hf-btn-primary" onClick={() => convert(viewing)}>
+                    <ArrowRight size={14} /> Convert to Sale
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -6732,6 +7178,17 @@ function NewQuoteModal({ db, setDb, onClose, notify }) {
 /* ================= CASHBOOK & EXPENSES ================= */
 function Cashbook({ db, setDb, notify, currentUser }) {
   const [showExpense, setShowExpense] = useState(false);
+  const [expenseSearch, setExpenseSearch] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState("all");
+
+  // Store PIN Verification Modal
+  const [pinModal, setPinModal] = useState({
+    isOpen: false,
+    title: "",
+    description: "",
+    onSuccess: () => {},
+  });
+
   const today = todayISO(0);
   const inflows = db.sales.filter(s => isSameDay(s.date, today) && s.payment !== "credit");
   const paymentsIn = [...db.customers.flatMap(c => (c.payments||[]).filter(p=>isSameDay(p.date, today)).map(p=>({...p, who:c.name}))) ];
@@ -6763,6 +7220,7 @@ function Cashbook({ db, setDb, notify, currentUser }) {
     const exp = {
       id: expId,
       date: todayStr,
+      time: timeStr,
       category: form.category,
       amount: amountVal,
       description: form.description || (form.category === "Supplier Payment" ? `Payment to supplier: ${(db.suppliers || []).find(s => s.id === form.supplierId)?.name || 'Supplier'}` : "No description"),
@@ -6816,11 +7274,140 @@ function Cashbook({ db, setDb, notify, currentUser }) {
     setShowExpense(false);
   }
 
+  /* ---------- Delete Individual Expense with PIN ---------- */
+  function handleDeleteExpense(expToDelete) {
+    setPinModal({
+      isOpen: true,
+      title: "Authorize Delete Expense Record",
+      description: `Enter Store Security PIN to delete expense "${expToDelete.category} - ${fmt(expToDelete.amount)}". ${expToDelete.supplierId ? "Linked supplier payment will also be reversed." : ""}`,
+      onSuccess: () => {
+        const todayStr = todayISO(0);
+        const timeStr = new Date().toTimeString().slice(0, 5);
+        const operator = currentUser?.name || "Owner";
+
+        setDb(prev => {
+          // If this was linked to a supplier payment, remove it from supplier ledger as well
+          let updatedSuppliers = prev.suppliers || [];
+          if (expToDelete.supplierId) {
+            updatedSuppliers = updatedSuppliers.map(s => {
+              if (s.id !== expToDelete.supplierId) return s;
+              return {
+                ...s,
+                payments: (s.payments || []).filter(p => p.expenseId !== expToDelete.id && p.id !== expToDelete.id)
+              };
+            });
+          }
+
+          const updatedExpenses = (prev.expenses || []).filter(e => e.id !== expToDelete.id);
+
+          return {
+            ...prev,
+            suppliers: updatedSuppliers,
+            expenses: updatedExpenses,
+            auditLog: [
+              {
+                id: uid("LOG"),
+                time: `${todayStr} ${timeStr}`,
+                user: operator,
+                role: currentUser?.role || "Owner",
+                category: "Expense Deleted",
+                action: `Deleted expense — ${expToDelete.category} (${fmt(expToDelete.amount)})`,
+                detail: `Expense removed — Verified via Store PIN`,
+                target: expToDelete.category,
+              },
+              ...(prev.auditLog || [])
+            ]
+          };
+        });
+
+        notify("success", "Expense Removed", `Expense of ${fmt(expToDelete.amount)} deleted.`);
+        setPinModal({ isOpen: false, title: "", description: "", onSuccess: () => {} });
+      }
+    });
+  }
+
+  /* ---------- Clear All Expenses with PIN ---------- */
+  function handleClearAllExpenses() {
+    if ((db.expenses || []).length === 0) {
+      notify("info", "No Expenses Found", "Expenses ledger is already empty.");
+      return;
+    }
+
+    setPinModal({
+      isOpen: true,
+      title: "Authorize Clear All Expenses",
+      description: `WARNING: Enter Store Security PIN to permanently delete all ${db.expenses.length} recorded business expenses.`,
+      onSuccess: () => {
+        const todayStr = todayISO(0);
+        const timeStr = new Date().toTimeString().slice(0, 5);
+        const operator = currentUser?.name || "Owner";
+
+        setDb(prev => ({
+          ...prev,
+          expenses: [],
+          auditLog: [
+            {
+              id: uid("LOG"),
+              time: `${todayStr} ${timeStr}`,
+              user: operator,
+              role: currentUser?.role || "Owner",
+              category: "Bulk Expense Deletion",
+              action: `Cleared all expenses (${(prev.expenses || []).length} records removed)`,
+              detail: `Expense ledger wiped — Verified via Store PIN`,
+              target: "All Expenses",
+            },
+            ...(prev.auditLog || [])
+          ]
+        }));
+
+        notify("success", "All Expenses Cleared", "All expense records have been deleted.");
+        setPinModal({ isOpen: false, title: "", description: "", onSuccess: () => {} });
+      }
+    });
+  }
+
+  // Filtered expenses list
+  const filteredExpenses = (db.expenses || []).filter(e => {
+    const matchCat = selectedCategory === "all" || e.category === selectedCategory;
+    const q = expenseSearch.trim().toLowerCase();
+    const matchQ = !q || (e.description || "").toLowerCase().includes(q) || (e.category || "").toLowerCase().includes(q);
+    return matchCat && matchQ;
+  });
+
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-        <div className="disp" style={{ fontSize: 26, fontWeight: 700 }}>Cashbook & Daily Flow</div>
-        <button className="hf-btn hf-btn-primary" onClick={() => setShowExpense(true)}><Plus size={15} /> Record Expense</button>
+      <PinVerificationModal
+        isOpen={pinModal.isOpen}
+        title={pinModal.title}
+        description={pinModal.description}
+        onSuccess={pinModal.onSuccess}
+        onCancel={() => setPinModal({ isOpen: false, title: "", description: "", onSuccess: () => {} })}
+        db={db}
+      />
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <div className="disp" style={{ fontSize: 26, fontWeight: 700, marginBottom: 2 }}>Cashbook & Daily Flow</div>
+          <div style={{ color: "var(--ink-soft)", fontSize: 13 }}>
+            Track daily cash inflows, staff payouts, operating expenses, and net money flow in real time.
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {(db.expenses || []).length > 0 && (
+            <button
+              type="button"
+              className="hf-btn hf-btn-ghost"
+              style={{ color: "var(--red)", borderColor: "var(--red)" }}
+              onClick={handleClearAllExpenses}
+              title="Delete all expense records (Requires PIN)"
+            >
+              <Trash2 size={14} /> Clear All Expenses
+            </button>
+          )}
+          <button className="hf-btn hf-btn-primary" onClick={() => setShowExpense(true)}>
+            <Plus size={15} /> Record Expense
+          </button>
+        </div>
       </div>
 
       <div className="hf-cashbook-summary">
@@ -6843,7 +7430,7 @@ function Cashbook({ db, setDb, notify, currentUser }) {
       <div className="hf-two-col">
         <div>
           <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
-            <TrendingUp size={15} color="var(--green)" /> Money In (Cash & M-Pesa Sales + Debt Payments)
+            <TrendingUp size={15} color="var(--green)" /> Today's Inflows (Sales & Debt Payments)
           </div>
           <div className="hf-card">
             {inflows.map(s => <Row key={s.id} label={`Sale ${s.invoiceNo} (${s.payment === "mpesa" ? "M-Pesa" : s.payment.toUpperCase()})`} value={s.total} isProfit />)}
@@ -6853,7 +7440,7 @@ function Cashbook({ db, setDb, notify, currentUser }) {
         </div>
         <div>
           <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
-            <TrendingDown size={15} color="var(--red)" /> Money Out (Expenses & Supplier Payments)
+            <TrendingDown size={15} color="var(--red)" /> Today's Outflows (Expenses & Payments)
           </div>
           <div className="hf-card">
             {outflows.map(e => <Row key={e.id} label={`${e.category} — ${e.description}`} value={e.amount} isLoss />)}
@@ -6864,6 +7451,90 @@ function Cashbook({ db, setDb, notify, currentUser }) {
 
       <div className="disp" style={{ fontSize: 18, fontWeight: 700, margin: "24px 0 10px" }}>Expenses This Month by Category</div>
       <ExpenseSummary db={db} />
+
+      {/* Complete Expenses Ledger Table */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "28px 0 12px", flexWrap: "wrap", gap: 10 }}>
+        <div className="disp" style={{ fontSize: 18, fontWeight: 700 }}>Complete Expenses Ledger</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <input
+            className="hf-input"
+            style={{ width: 180, fontSize: 12.5 }}
+            placeholder="Search description…"
+            value={expenseSearch}
+            onChange={e => setExpenseSearch(e.target.value)}
+          />
+          <select
+            className="hf-input"
+            style={{ width: 150, fontSize: 12.5 }}
+            value={selectedCategory}
+            onChange={e => setSelectedCategory(e.target.value)}
+          >
+            <option value="all">All Categories</option>
+            {["Transport", "Rent", "Salaries", "Electricity", "Repairs", "Supplier Payment", "Stock Purchase", "Other"].map(c => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="hf-card">
+        <table className="hf-table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Category</th>
+              <th>Description / Notes</th>
+              <th>Payment Mode</th>
+              <th style={{ textAlign: "right" }}>Amount</th>
+              <th style={{ width: 60, textAlign: "right" }}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredExpenses.map(e => (
+              <tr key={e.id}>
+                <td>
+                  <div style={{ fontWeight: 600 }}>{niceDate(e.date)}</div>
+                  {e.time && <div style={{ fontSize: 11, color: "var(--ink-soft)" }}>{e.time}</div>}
+                </td>
+                <td>
+                  <Pill tone={e.category === "Supplier Payment" || e.category === "Stock Purchase" ? "amber" : "steel"}>
+                    {e.category}
+                  </Pill>
+                </td>
+                <td style={{ fontSize: 12.5 }}>
+                  {e.description || "—"}
+                </td>
+                <td>
+                  <span style={{ fontSize: 11.5, textTransform: "uppercase", fontWeight: 600, color: "var(--ink-soft)" }}>
+                    {e.payment || "cash"}
+                  </span>
+                </td>
+                <td className="mono text-loss" style={{ textAlign: "right", fontWeight: 700 }}>
+                  {fmt(e.amount)}
+                </td>
+                <td style={{ textAlign: "right" }}>
+                  <button
+                    type="button"
+                    className="hf-btn hf-btn-ghost"
+                    style={{ padding: "4px 7px", color: "var(--red)" }}
+                    onClick={() => handleDeleteExpense(e)}
+                    title="Delete this expense (Requires PIN)"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {filteredExpenses.length === 0 && (
+              <tr>
+                <td colSpan={6} style={{ textAlign: "center", padding: 24, color: "var(--ink-soft)" }}>
+                  No expense records found.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
 
       {showExpense && <NewExpenseModal db={db} onCancel={() => setShowExpense(false)} onSave={addExpense} notify={notify} />}
     </div>
@@ -6985,20 +7656,43 @@ function NewExpenseModal({ db, onCancel, onSave, notify }) {
   );
 }
 
-/* ================= REPORTS ================= */
-function Reports({ db, notify, role }) {
-  const monthPrefix = todayISO(0).slice(0, 7);
-  const monthName = new Date(todayISO(0)).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
-  const monthSales = db.sales.filter(s => s.date.startsWith(monthPrefix));
-  const revenue = monthSales.reduce((a, s) => a + s.total, 0);
-  const cogs = monthSales.reduce((a, s) => a + s.cost, 0);
+/* ================= REPORTS & BUSINESS INTELLIGENCE ================= */
+function Reports({ db, setDb, notify, role, currentUser }) {
+  const [period, setPeriod] = useState("thisMonth"); // "thisMonth" | "lastMonth" | "allTime"
+
+  // Store PIN Verification Modal
+  const [pinModal, setPinModal] = useState({
+    isOpen: false,
+    title: "",
+    description: "",
+    onSuccess: () => {},
+  });
+
+  const today = todayISO(0);
+  const thisMonthPrefix = today.slice(0, 7);
+
+  // Compute previous month prefix (e.g., "2026-07")
+  const d = new Date();
+  d.setMonth(d.getMonth() - 1);
+  const lastMonthPrefix = d.toISOString().slice(0, 7);
+
+  const activePrefix = period === "thisMonth" ? thisMonthPrefix : period === "lastMonth" ? lastMonthPrefix : "";
+  const periodLabel = period === "thisMonth"
+    ? new Date(today).toLocaleDateString("en-GB", { month: "long", year: "numeric" })
+    : period === "lastMonth"
+    ? d.toLocaleDateString("en-GB", { month: "long", year: "numeric" })
+    : "All-Time Records";
+
+  const periodSales = (db.sales || []).filter(s => !activePrefix || (s.date && s.date.startsWith(activePrefix)));
+  const revenue = periodSales.reduce((a, s) => a + s.total, 0);
+  const cogs = periodSales.reduce((a, s) => a + s.cost, 0);
   const grossProfit = revenue - cogs;
-  const monthExpenses = db.expenses.filter(e => e.date.startsWith(monthPrefix)).reduce((a, e) => a + e.amount, 0);
-  const netEst = grossProfit - monthExpenses;
+  const periodExpenses = (db.expenses || []).filter(e => !activePrefix || (e.date && e.date.startsWith(activePrefix))).reduce((a, e) => a + e.amount, 0);
+  const netEst = grossProfit - periodExpenses;
 
   const productProfit = {};
-  monthSales.forEach(s => s.items.forEach(i => {
-    const p = db.products.find(pp => pp.id === i.productId);
+  periodSales.forEach(s => (s.items || []).forEach(i => {
+    const p = (db.products || []).find(pp => pp.id === i.productId);
     if (!p) return;
     productProfit[p.id] = productProfit[p.id] || { name: p.name, qtySold: 0, sales: 0, profit: 0 };
     productProfit[p.id].qtySold += i.qty;
@@ -7007,31 +7701,218 @@ function Reports({ db, notify, role }) {
   }));
   const ranked = Object.values(productProfit).sort((a, b) => b.profit - a.profit);
 
-  const lowStock = db.products.filter(p => p.stock <= p.minStock);
-  const debts = db.customers.map(c => ({ name: c.name, phone: c.phone, creditLimit: c.creditLimit, balance: customerBalance(db, c.id) })).filter(c => c.balance > 0);
+  const lowStock = (db.products || []).filter(p => (Number(p.stock) || 0) <= (Number(p.minStock) || 0));
+  const debts = (db.customers || []).map(c => ({ name: c.name, phone: c.phone, creditLimit: c.creditLimit, balance: customerBalance(db, c.id) })).filter(c => c.balance > 0);
 
   function downloadPDF() {
     exportReportCenterPDF({
-      monthName,
+      monthName: periodLabel,
       revenue,
       cogs,
       grossProfit,
-      expenses: monthExpenses,
+      expenses: periodExpenses,
       netProfit: netEst,
       rankedProducts: ranked,
       lowStock,
       debts,
     });
-    notify("success", "Performance Report PDF Exported", `Report for ${monthName} generated.`);
+    notify("success", "Performance Report PDF Exported", `Report for ${periodLabel} generated.`);
+  }
+
+  /* ---------- Fresh Onboarding Reset: Clear All Transaction Numbers ---------- */
+  function handleFreshOnboardingReset() {
+    setPinModal({
+      isOpen: true,
+      title: "Authorize Fresh Onboarding Reset",
+      description: "WARNING: Enter Store Security PIN to wipe all sales, expenses, stock delivery logs, quotations, and zero out customer debts and supplier balances for a clean fresh store onboarding. (Your registered products, customers, and user accounts will be kept).",
+      onSuccess: () => {
+        const todayStr = todayISO(0);
+        const timeStr = new Date().toTimeString().slice(0, 5);
+        const operator = currentUser?.name || "Owner";
+
+        setDb(prev => {
+          // Zero out customer debt balances by clearing payments and customer sales
+          const cleanCustomers = (prev.customers || []).map(c => ({
+            ...c,
+            payments: []
+          }));
+
+          // Zero out supplier balances by clearing supplier payments
+          const cleanSuppliers = (prev.suppliers || []).map(s => ({
+            ...s,
+            payments: []
+          }));
+
+          return {
+            ...prev,
+            sales: [],
+            expenses: [],
+            purchases: [],
+            quotations: [],
+            customers: cleanCustomers,
+            suppliers: cleanSuppliers,
+            invoiceSeq: 1001,
+            quoteSeq: 1001,
+            poSeq: 2001,
+            auditLog: [
+              {
+                id: uid("LOG"),
+                time: `${todayStr} ${timeStr}`,
+                user: operator,
+                role: "Owner",
+                category: "System Onboarding Reset",
+                action: "Zeroed out all transaction numbers and metrics for fresh onboarding",
+                detail: "Cleared sales, expenses, purchases, quotations, and debts — Verified via Store PIN",
+                target: "Report Centre",
+              }
+            ]
+          };
+        });
+
+        notify("success", "Fresh Onboarding Reset Complete", "All transaction history and numbers have been reset to KSh 0.");
+        setPinModal({ isOpen: false, title: "", description: "", onSuccess: () => {} });
+      }
+    });
+  }
+
+  /* ---------- Factory System Reset: Wipe Entire Store Database ---------- */
+  function handleFactoryReset() {
+    setPinModal({
+      isOpen: true,
+      title: "Authorize Complete Factory System Reset",
+      description: "EXTREME WARNING: Enter Store Security PIN to completely erase all products, customers, suppliers, inventory, sales, expenses, and history. The system will be returned to a blank factory state (Only your login account will be preserved).",
+      onSuccess: () => {
+        const todayStr = todayISO(0);
+        const timeStr = new Date().toTimeString().slice(0, 5);
+        const operator = currentUser?.name || "Owner";
+
+        setDb(prev => ({
+          users: prev.users || [],
+          products: [],
+          customers: [],
+          suppliers: [],
+          sales: [],
+          expenses: [],
+          purchases: [],
+          quotations: [],
+          invoiceSeq: 1001,
+          quoteSeq: 1001,
+          poSeq: 2001,
+          adjSeq: 1001,
+          auditLog: [
+            {
+              id: uid("LOG"),
+              time: `${todayStr} ${timeStr}`,
+              user: operator,
+              role: "Owner",
+              category: "Factory Reset",
+              action: "Performed complete factory reset of the hardware management system",
+              detail: "All products, customers, suppliers, and transactional data wiped clean",
+              target: "HardwareFlow System",
+            }
+          ]
+        }));
+
+        notify("success", "Factory Reset Complete", "System reset to blank clean state.");
+        setPinModal({ isOpen: false, title: "", description: "", onSuccess: () => {} });
+      }
+    });
   }
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
-        <div className="disp" style={{ fontSize: 26, fontWeight: 700 }}>Report Centre — {monthName}</div>
-        <button className="hf-btn hf-btn-ghost" onClick={downloadPDF}>
-          <Download size={15} /> Download PDF Report
-        </button>
+      <PinVerificationModal
+        isOpen={pinModal.isOpen}
+        title={pinModal.title}
+        description={pinModal.description}
+        onSuccess={pinModal.onSuccess}
+        onCancel={() => setPinModal({ isOpen: false, title: "", description: "", onSuccess: () => {} })}
+        db={db}
+      />
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <div className="disp" style={{ fontSize: 26, fontWeight: 700, marginBottom: 2 }}>Report Centre — {periodLabel}</div>
+          <div style={{ color: "var(--ink-soft)", fontSize: 13 }}>
+            Business performance metrics, profitability summaries, and financial reconciliation.
+          </div>
+        </div>
+
+        {/* Period Selector & Action Buttons */}
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {/* Period Selector Tabs */}
+          <div style={{ display: "flex", background: "var(--surface-hover)", padding: 3, borderRadius: 10, border: "1px solid var(--line)" }}>
+            <button
+              type="button"
+              onClick={() => setPeriod("thisMonth")}
+              className="hf-btn"
+              style={{
+                fontSize: 12,
+                padding: "6px 12px",
+                background: period === "thisMonth" ? "var(--rust)" : "transparent",
+                color: period === "thisMonth" ? "#fff" : "var(--ink)",
+                borderRadius: 7,
+              }}
+            >
+              This Month
+            </button>
+            <button
+              type="button"
+              onClick={() => setPeriod("lastMonth")}
+              className="hf-btn"
+              style={{
+                fontSize: 12,
+                padding: "6px 12px",
+                background: period === "lastMonth" ? "var(--rust)" : "transparent",
+                color: period === "lastMonth" ? "#fff" : "var(--ink)",
+                borderRadius: 7,
+              }}
+            >
+              Last Month
+            </button>
+            <button
+              type="button"
+              onClick={() => setPeriod("allTime")}
+              className="hf-btn"
+              style={{
+                fontSize: 12,
+                padding: "6px 12px",
+                background: period === "allTime" ? "var(--rust)" : "transparent",
+                color: period === "allTime" ? "#fff" : "var(--ink)",
+                borderRadius: 7,
+              }}
+            >
+              All Time
+            </button>
+          </div>
+
+          <button className="hf-btn hf-btn-ghost" onClick={downloadPDF}>
+            <Download size={15} /> Export PDF
+          </button>
+
+          {role === "owner" && (
+            <div style={{ display: "flex", gap: 6 }}>
+              <button
+                type="button"
+                className="hf-btn hf-btn-ghost"
+                style={{ color: "var(--amber)", borderColor: "var(--amber)" }}
+                onClick={handleFreshOnboardingReset}
+                title="Reset all transaction numbers, sales, expenses, and debts to 0 for fresh business onboarding (Requires PIN)"
+              >
+                <RotateCcw size={14} /> Onboarding Reset
+              </button>
+              <button
+                type="button"
+                className="hf-btn hf-btn-ghost"
+                style={{ color: "var(--red)", borderColor: "var(--red)" }}
+                onClick={handleFactoryReset}
+                title="Erase all products, customers, and history (Requires PIN)"
+              >
+                <Trash2 size={14} /> Factory Reset
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 12, marginBottom: 22 }}>
@@ -7049,7 +7930,7 @@ function Reports({ db, notify, role }) {
         </div>
         <div className="hf-ticket" style={{ padding: 16, display: "flex", flexDirection: "column" }}>
           <div className="hf-kpi-label" style={{ minHeight: 24 }}>Expenses</div>
-          <div className="mono text-loss" style={{ fontSize: 20, fontWeight: 700, marginTop: "auto" }}>{fmt(monthExpenses)}</div>
+          <div className="mono text-loss" style={{ fontSize: 20, fontWeight: 700, marginTop: "auto" }}>{fmt(periodExpenses)}</div>
         </div>
         <div className="hf-ticket" style={{ padding: 16, display: "flex", flexDirection: "column" }}>
           <div className="hf-kpi-label" style={{ minHeight: 24 }}>Estimated Net {netEst >= 0 ? "Profit" : "Loss"}</div>
@@ -7077,7 +7958,7 @@ function Reports({ db, notify, role }) {
                   </div>
                 </div>
               ))}
-              {ranked.length === 0 && <div style={{ padding: 16, color: "var(--ink-soft)", fontSize: 13 }}>No sales recorded this month.</div>}
+              {ranked.length === 0 && <div style={{ padding: 16, color: "var(--ink-soft)", fontSize: 13 }}>No sales recorded for this period.</div>}
             </div>
           ) : (
             <div className="hf-card" style={{ padding: 24, textAlign: "center", color: "var(--ink-soft)" }}>
@@ -8214,7 +9095,7 @@ export default function App() {
     customers: <Customers db={db} setDb={setDb} notify={notify} currentUser={currentUser} />,
     quotations: <Quotations db={db} setDb={setDb} notify={notify} currentUser={currentUser} />,
     cashbook: <Cashbook db={db} setDb={setDb} notify={notify} currentUser={currentUser} />,
-    reports: <Reports db={db} notify={notify} role={role} />,
+    reports: <Reports db={db} setDb={setDb} notify={notify} role={role} currentUser={currentUser} />,
     audit: <AuditLog db={db} setDb={setDb} notify={notify} currentUser={currentUser} />,
   };
 
