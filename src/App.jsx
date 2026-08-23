@@ -5598,6 +5598,44 @@ function Customers({ db, setDb, notify, currentUser }) {
     notify("success", "Payment Received", `Recorded ${fmt(amount)} received from ${cust?.name}. Balance updated.`);
   }
 
+  function deletePayment(customerId, paymentIndex) {
+    const cust = (db.customers || []).find(c => c.id === customerId);
+    if (!cust) return;
+    const targetPayment = (cust.payments || [])[paymentIndex];
+    if (!targetPayment) return;
+
+    if (!confirm(`Are you sure you want to remove this payment of ${fmt(targetPayment.amount)} from ${cust.name}? This will restore their outstanding debt balance.`)) {
+      return;
+    }
+
+    const today = todayISO(0);
+    const timeStr = new Date().toTimeString().slice(0, 5);
+    const operator = currentUser?.name || "Owner";
+
+    setDb(prev => ({
+      ...prev,
+      customers: (prev.customers || []).map(c => c.id === customerId ? {
+        ...c,
+        payments: (c.payments || []).filter((_, idx) => idx !== paymentIndex)
+      } : c),
+      auditLog: [
+        {
+          id: uid("LOG"),
+          time: `${today} ${timeStr}`,
+          user: operator,
+          role: currentUser?.role || "Owner",
+          category: "Payment Voided",
+          action: `Voided debt payment for ${cust.name}`,
+          detail: `Removed payment of ${fmt(targetPayment.amount)} — Restored debt balance`,
+          target: cust.name,
+        },
+        ...(prev.auditLog || [])
+      ]
+    }));
+
+    notify("success", "Payment Voided", `Payment of ${fmt(targetPayment.amount)} removed. ${cust.name}'s debt balance restored.`);
+  }
+
   function statusOf(c) {
     if (c.balance === 0) return { tone: "green", label: "Settled" };
     if (c.days > 30) return { tone: "red", label: "Overdue" };
@@ -5801,6 +5839,7 @@ function Customers({ db, setDb, notify, currentUser }) {
           customer={active}
           db={db}
           onPay={recordPayment}
+          onDeletePayment={deletePayment}
           onDeleteCustomer={handleDeleteCustomer}
           onClose={() => setSelected(null)}
           notify={notify}
@@ -5818,11 +5857,12 @@ function Customers({ db, setDb, notify, currentUser }) {
   );
 }
 
-function CustomerDrawer({ customer, db, onPay, onDeleteCustomer, onClose, notify }) {
+function CustomerDrawer({ customer, db, onPay, onDeletePayment, onDeleteCustomer, onClose, notify }) {
   const [amount, setAmount] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("cash"); // "cash" | "mpesa" | "bank"
   const [reference, setReference] = useState("");
   const sales = (db.sales || []).filter(s => s.customerId === customer.id);
+  const payments = customer.payments || [];
 
   function handlePay() {
     const val = Number(amount);
@@ -5922,6 +5962,68 @@ function CustomerDrawer({ customer, db, onPay, onDeleteCustomer, onClose, notify
             </div>
           </div>
         )}
+
+        {/* Customer Payment History & Receipts */}
+        <div style={{ marginBottom: 20 }}>
+          <div className="disp" style={{ fontSize: 15, fontWeight: 700, marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span>Payment History & Receipts</span>
+            <span style={{ fontSize: 12, color: "var(--ink-soft)", fontWeight: 500 }}>
+              {payments.length} recorded
+            </span>
+          </div>
+
+          {payments.length === 0 ? (
+            <div style={{ color: "var(--ink-soft)", fontSize: 12.5, padding: "12px 0", textAlign: "center", background: "var(--surface-hover)", borderRadius: 8 }}>
+              No payments recorded for this customer yet.
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {payments.map((p, idx) => (
+                <div
+                  key={idx}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "8px 10px",
+                    background: "var(--surface-hover)",
+                    borderRadius: 8,
+                    border: "1px solid var(--line)",
+                    fontSize: 12.5,
+                  }}
+                >
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span className="mono" style={{ fontWeight: 600 }}>{niceDate(p.date)}</span>
+                      <Pill tone="green">{p.method ? p.method.toUpperCase() : "CASH"}</Pill>
+                    </div>
+                    {p.reference && (
+                      <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginTop: 2 }}>
+                        Ref: {p.reference}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span className="mono text-profit" style={{ fontWeight: 700, fontSize: 13.5 }}>
+                      +{fmt(p.amount)}
+                    </span>
+                    {onDeletePayment && (
+                      <button
+                        type="button"
+                        className="hf-btn hf-btn-ghost"
+                        style={{ padding: "3px 6px", color: "var(--red)", borderColor: "transparent" }}
+                        onClick={() => onDeletePayment(customer.id, idx)}
+                        title="Delete / undo this payment (Restores debt)"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
 
         <div className="disp" style={{ fontSize: 15, fontWeight: 700, marginBottom: 8 }}>Purchase History</div>
         {sales.length === 0 && <div style={{ color: "var(--ink-soft)", fontSize: 13, marginBottom: 14 }}>No purchases recorded yet.</div>}
@@ -6687,6 +6789,196 @@ function Reports({ db, notify, role }) {
   );
 }
 
+/**
+ * Intelligently reverses the underlying financial, inventory, or ledger transaction
+ * associated with an audit log record when the user deletes the audit event.
+ */
+function revertTransactionFromAuditLog(prevDb, logItem) {
+  let updatedDb = {
+    ...prevDb,
+    customers: [...(prevDb.customers || [])],
+    suppliers: [...(prevDb.suppliers || [])],
+    expenses: [...(prevDb.expenses || [])],
+    sales: [...(prevDb.sales || [])],
+    products: [...(prevDb.products || [])],
+    auditLog: [...(prevDb.auditLog || [])],
+  };
+
+  const cat = (logItem.category || "").toLowerCase();
+  const act = (logItem.action || "").toLowerCase();
+  const det = (logItem.detail || "").toLowerCase();
+  let reversalDescription = "";
+
+  // 1. Customer Debt Payment Reversal
+  if (cat.includes("customer payment") || cat.includes("debt") || act.includes("debt payment") || act.includes("payment from")) {
+    const custTargetName = (logItem.target || "").trim();
+    // Extract numerical amount from detail e.g. "KSh 25,000 via CASH" or detail string
+    const amtMatch = (logItem.detail || "").replace(/,/g, "").match(/\d+/);
+    const amountVal = amtMatch ? Number(amtMatch[0]) : null;
+    const logDate = (logItem.time || "").slice(0, 10);
+
+    let foundAndReverted = false;
+    updatedDb.customers = updatedDb.customers.map(c => {
+      const isTargetCust = (custTargetName && c.name.toLowerCase() === custTargetName.toLowerCase()) ||
+                           (custTargetName && c.id === custTargetName) ||
+                           (act.includes(c.name.toLowerCase()));
+
+      if (isTargetCust && !foundAndReverted) {
+        const paymentsList = [...(c.payments || [])];
+        let removeIdx = -1;
+
+        // Search for matching payment starting from latest
+        for (let i = paymentsList.length - 1; i >= 0; i--) {
+          const p = paymentsList[i];
+          const pAmt = Number(p.amount) || 0;
+          if (amountVal && pAmt === amountVal && (!logDate || p.date === logDate)) {
+            removeIdx = i;
+            break;
+          } else if (amountVal && pAmt === amountVal) {
+            removeIdx = i;
+            break;
+          } else if (!amountVal && p.date === logDate) {
+            removeIdx = i;
+            break;
+          }
+        }
+
+        if (removeIdx !== -1) {
+          const removedPayment = paymentsList.splice(removeIdx, 1)[0];
+          foundAndReverted = true;
+          reversalDescription = `Removed payment of ${fmt(removedPayment.amount)} from ${c.name} (Debt balance restored).`;
+          return {
+            ...c,
+            payments: paymentsList,
+          };
+        }
+      }
+      return c;
+    });
+  }
+
+  // 2. Supplier Payment Reversal
+  else if (cat.includes("supplier payment") || act.includes("paid supplier")) {
+    const suppTargetName = (logItem.target || "").trim();
+    const amtMatch = (logItem.detail || "").replace(/,/g, "").match(/\d+/);
+    const amountVal = amtMatch ? Number(amtMatch[0]) : null;
+    let linkedExpId = null;
+
+    let foundAndReverted = false;
+    updatedDb.suppliers = updatedDb.suppliers.map(s => {
+      const isTargetSupp = (suppTargetName && s.name.toLowerCase() === suppTargetName.toLowerCase()) ||
+                           (suppTargetName && s.id === suppTargetName) ||
+                           (act.includes(s.name.toLowerCase()));
+
+      if (isTargetSupp && !foundAndReverted) {
+        const paymentsList = [...(s.payments || [])];
+        let removeIdx = -1;
+
+        for (let i = paymentsList.length - 1; i >= 0; i--) {
+          const p = paymentsList[i];
+          if (amountVal ? Number(p.amount) === amountVal : true) {
+            removeIdx = i;
+            linkedExpId = p.expenseId || p.id;
+            break;
+          }
+        }
+
+        if (removeIdx !== -1) {
+          const removedPayment = paymentsList.splice(removeIdx, 1)[0];
+          foundAndReverted = true;
+          reversalDescription = `Removed payment of ${fmt(removedPayment.amount)} to ${s.name} (Payables balance restored).`;
+          return {
+            ...s,
+            payments: paymentsList,
+          };
+        }
+      }
+      return s;
+    });
+
+    // Remove matching expense
+    if (linkedExpId || amountVal) {
+      let expRemoved = false;
+      updatedDb.expenses = updatedDb.expenses.filter(e => {
+        if (!expRemoved) {
+          if (linkedExpId && (e.id === linkedExpId || e.expenseId === linkedExpId)) {
+            expRemoved = true;
+            return false;
+          }
+          if (e.category === "Supplier Payment" && amountVal && Number(e.amount) === amountVal) {
+            expRemoved = true;
+            return false;
+          }
+        }
+        return true;
+      });
+    }
+  }
+
+  // 3. General Expense Reversal
+  else if (cat === "expense" || act.includes("recorded expense")) {
+    const amtMatch = (logItem.detail || "").replace(/,/g, "").match(/\d+/);
+    const amountVal = amtMatch ? Number(amtMatch[0]) : null;
+    const targetCategory = (logItem.target || "").trim();
+
+    let expRemoved = false;
+    updatedDb.expenses = updatedDb.expenses.filter(e => {
+      if (!expRemoved) {
+        const catMatches = targetCategory ? e.category.toLowerCase() === targetCategory.toLowerCase() : act.includes(e.category.toLowerCase());
+        const amtMatches = amountVal ? Number(e.amount) === amountVal : true;
+        if (catMatches && amtMatches) {
+          expRemoved = true;
+          reversalDescription = `Removed expense of ${fmt(e.amount)} (${e.category}).`;
+          return false;
+        }
+      }
+      return true;
+    });
+  }
+
+  // 4. Sale / Invoice Reversal
+  else if (cat.includes("sale") || act.includes("sold") || act.includes("credit sale")) {
+    const invMatch = (logItem.detail || logItem.action || "").match(/INV-[A-Za-z0-9-]+/i);
+    if (invMatch) {
+      const invNo = invMatch[0];
+      const saleToCancel = updatedDb.sales.find(s => s.invoiceNo === invNo || s.id === invNo);
+      if (saleToCancel) {
+        // Restock products
+        updatedDb.products = updatedDb.products.map(p => {
+          const item = (saleToCancel.items || []).find(it => it.productId === p.id);
+          if (!item) return p;
+          const restoredStock = (Number(p.stock) || 0) + Number(item.qty || 0);
+          return {
+            ...p,
+            stock: restoredStock,
+            history: [
+              ...(p.history || []),
+              {
+                id: uid("H"),
+                date: todayISO(0),
+                time: new Date().toTimeString().slice(0, 5),
+                action: "Restock",
+                ref: `REV-${invNo}`,
+                qty: Number(item.qty || 0),
+                balance: restoredStock,
+                user: "Owner",
+                reason: `Audit log removal — Sale ${invNo} reversed`,
+              }
+            ]
+          };
+        });
+        updatedDb.sales = updatedDb.sales.filter(s => s.invoiceNo !== invNo && s.id !== invNo);
+        reversalDescription = `Cancelled sale ${invNo} (${fmt(saleToCancel.total)}) and restored inventory stock.`;
+      }
+    }
+  }
+
+  // Remove the audit log entry itself
+  updatedDb.auditLog = (prevDb.auditLog || []).filter(a => (a.id ? a.id !== logItem.id : a !== logItem));
+
+  return { updatedDb, reversalDescription };
+}
+
 /* ================= MODERN INTERACTIVE AUDIT LOG ================= */
 function AuditLog({ db, setDb, notify, currentUser }) {
   const [query, setQuery] = useState("");
@@ -6732,18 +7024,18 @@ function AuditLog({ db, setDb, notify, currentUser }) {
     return <Pill tone="ink">AUDIT</Pill>;
   }
 
-  /* ---------- Delete Single Audit Log with Store PIN ---------- */
+  /* ---------- Delete Single Audit Log with Store PIN & Revert Linked Impact ---------- */
   function handleDeleteSingleLog(logItem) {
     setPinModal({
       isOpen: true,
-      title: "Authorize Log Record Deletion",
-      description: `Enter Store Security PIN to permanently remove audit event "${logItem.action}".`,
+      title: "Authorize Log Deletion & Transaction Reversal",
+      description: `Enter Store Security PIN to permanently remove audit event "${logItem.action}". This will reverse the linked transaction and update Dashboard & Account balances.`,
       onSuccess: () => {
-        setDb(prev => ({
-          ...prev,
-          auditLog: (prev.auditLog || []).filter(a => (a.id ? a.id !== logItem.id : a !== logItem))
-        }));
-        notify("success", "Audit Log Entry Deleted", "The selected audit log record was removed.");
+        setDb(prev => {
+          const { updatedDb, reversalDescription } = revertTransactionFromAuditLog(prev, logItem);
+          notify("success", "Audit Record & Transaction Reverted", reversalDescription || "Audit record removed and dashboard balances updated.");
+          return updatedDb;
+        });
         setSelectedLog(null);
         setPinModal({ isOpen: false, title: "", description: "", onSuccess: () => {} });
       }
