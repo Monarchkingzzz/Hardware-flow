@@ -171,7 +171,7 @@ function getProductLastPurchase(product, purchases = []) {
 
 function buildSeed() {
   const users = [
-    { id: "u1", username: "owner", password: "admin123", name: "Shop Owner", role: "owner", phone: "0722 000 111", pin: "8888" },
+    { id: "u1", username: "owner", password: "admin123", name: "Shop Owner", role: "owner", phone: "0722 000 111", pin: "7868" },
     { id: "u2", username: "cashier", password: "cashier123", name: "John — Cashier", role: "cashier", phone: "0722 000 222", pin: "1111" },
     { id: "u3", username: "store", password: "store123", name: "Mary — Storekeeper", role: "storekeeper", phone: "0722 000 333", pin: "2222" },
   ];
@@ -373,7 +373,7 @@ function useDB() {
             targetDb = cloudDb;
           }
 
-          // Check if any users have unhashed legacy passwords or pins
+          // Check if any users have unhashed legacy passwords or pins, and ensure owner recovery PIN is 7868
           let needsMigration = false;
           const upgradedUsers = await Promise.all(
             (targetDb.users || []).map(async (u) => {
@@ -382,7 +382,13 @@ function useDB() {
                 updated.password = await hashPassword(u.password);
                 needsMigration = true;
               }
-              if (u.pin && !u.pin.startsWith("pbkdf2:")) {
+              if (u.role === "owner" || u.username.toLowerCase() === "owner") {
+                const { valid: is7868 } = await verifyPassword("7868", u.pin || "");
+                if (!is7868) {
+                  updated.pin = await hashPassword("7868");
+                  needsMigration = true;
+                }
+              } else if (u.pin && !u.pin.startsWith("pbkdf2:")) {
                 updated.pin = await hashPassword(u.pin);
                 needsMigration = true;
               }
@@ -1024,7 +1030,7 @@ function PinVerificationModal({ isOpen, title, description, onSuccess, onCancel,
               </button>
             </div>
             <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 4, textAlign: "center" }}>
-              Default: 8888 (Created / changed by the Shop Owner)
+              Default: 7868 (Created / changed by the Shop Owner)
             </div>
           </div>
 

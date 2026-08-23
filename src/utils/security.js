@@ -222,8 +222,8 @@ export async function verifyActionPin(enteredPin, db) {
     if (valid) return true;
   }
 
-  // 3. Check against default action PIN "8888" or "1234"
-  if (clean === DEFAULT_ACTION_PIN || clean === "1234") {
+  // 3. Check against default action PIN "7868", "8888", or "1234"
+  if (clean === "7868" || clean === DEFAULT_ACTION_PIN || clean === "1234") {
     return true;
   }
 
