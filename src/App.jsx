@@ -3,7 +3,7 @@ import {
   LayoutDashboard, ShoppingCart, Package, Truck, Building2, Users, CreditCard,
   FileText, BookOpen, BarChart3, ShieldAlert, Lock, Search, Plus, X, Check,
   AlertTriangle, TrendingUp, TrendingDown, ChevronRight, Minus, Trash2,
-  ArrowRight, Receipt as ReceiptIcon, Download, Eye, Calendar,
+  ArrowRight, Receipt as ReceiptIcon, Download, Eye, EyeOff, Calendar,
   Award, CheckCircle2, Sun, Moon,
   LogOut, Key, Coins, Edit3, Menu, Wifi, WifiOff, RefreshCw,
   Bell, BellRing, PhoneCall, Filter,
@@ -39,6 +39,7 @@ import { downloadExcelTemplate, downloadCSVTemplate, parseProductFile } from "./
 const STORAGE_KEY = "hardwareflow-db-v1";
 const AUTH_KEY = "hardwareflow-auth-session";
 const THEME_KEY = "hardwareflow-theme";
+const PAGE_KEY = "hardwareflow-active-page";
 
 function fmt(n) {
   const v = Math.round(Number(n) || 0);
@@ -965,23 +966,49 @@ function PinVerificationModal({ isOpen, title, description, onSuccess, onCancel,
     }
   }
 
+  function handleKeypadPress(digit) {
+    setError("");
+    if (pin.length < 6) {
+      setPin(prev => prev + digit);
+    }
+  }
+
+  function handleBackspace() {
+    setError("");
+    setPin(prev => prev.slice(0, -1));
+  }
+
+  function handleClear() {
+    setError("");
+    setPin("");
+  }
+
   return (
     <div
       style={{
         position: "fixed",
         inset: 0,
-        background: "rgba(10,12,16,0.7)",
-        backdropFilter: "blur(2px)",
+        background: "rgba(10,12,16,0.75)",
+        backdropFilter: "blur(4px)",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        zIndex: 10000
+        zIndex: 15000,
+        padding: "16px",
       }}
       onClick={e => { e.stopPropagation(); onCancel(); }}
     >
       <div
-        className="hf-card"
-        style={{ width: 430, maxWidth: "92vw", padding: 22, boxShadow: "var(--shadow-lg)" }}
+        className="hf-card hf-modal-card"
+        style={{
+          width: 420,
+          maxWidth: "96vw",
+          maxHeight: "92vh",
+          overflowY: "auto",
+          padding: "22px 20px",
+          boxShadow: "0 20px 50px rgba(0,0,0,0.5)",
+          margin: "auto",
+        }}
         onClick={e => e.stopPropagation()}
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
@@ -991,31 +1018,34 @@ function PinVerificationModal({ isOpen, title, description, onSuccess, onCancel,
           <button
             type="button"
             onClick={e => { e.stopPropagation(); onCancel(); }}
-            style={{ background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)" }}
+            style={{ background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)", padding: 4 }}
           >
-            <X size={16} />
+            <X size={18} />
           </button>
         </div>
 
-        <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 14, lineHeight: 1.4 }}>
+        <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 12, lineHeight: 1.4 }}>
           {description || "Enter the Master Store Security PIN to authorize this sensitive action."}
         </div>
 
         {error && (
-          <div style={{ background: "var(--red-tint)", color: "var(--red)", border: "1px solid var(--red)", padding: "7px 10px", borderRadius: 7, fontSize: 12, marginBottom: 12 }}>
+          <div style={{ background: "var(--red-tint)", color: "var(--red)", border: "1px solid var(--red)", padding: "8px 10px", borderRadius: 8, fontSize: 12, marginBottom: 12 }}>
             {error}
           </div>
         )}
 
         <form onSubmit={handleVerify}>
-          <div style={{ marginBottom: 14 }}>
+          <div style={{ marginBottom: 12 }}>
             <div className="hf-kpi-label" style={{ marginBottom: 4 }}>Enter Store Security PIN (4–6 digits)</div>
             <div style={{ position: "relative" }}>
               <input
                 className="hf-input mono hf-input-with-right-icon"
                 type={showPin ? "text" : "password"}
+                inputMode="numeric"
+                pattern="[0-9]*"
+                autoComplete="one-time-code"
                 maxLength={6}
-                style={{ paddingRight: 40, fontSize: 16, textAlign: "center", letterSpacing: "0.25em" }}
+                style={{ paddingRight: 40, fontSize: 18, textAlign: "center", letterSpacing: "0.25em", fontWeight: 700 }}
                 placeholder="••••"
                 value={pin}
                 onClick={e => e.stopPropagation()}
@@ -1027,20 +1057,78 @@ function PinVerificationModal({ isOpen, title, description, onSuccess, onCancel,
                 onClick={e => { e.stopPropagation(); setShowPin(!showPin); }}
                 style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)", padding: 4, display: "flex", alignItems: "center", justifyContent: "center" }}
               >
-                {showPin ? <EyeOff size={15} /> : <Eye size={15} />}
+                {showPin ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
             </div>
             <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 4, textAlign: "center" }}>
-              Default: 7868 (Created / changed by the Shop Owner)
+              Default: 7868 (Created / managed by the Shop Owner)
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-            <button type="button" className="hf-btn hf-btn-ghost" onClick={e => { e.stopPropagation(); onCancel(); }}>
+          {/* Touch-Friendly On-Screen Numpad for Mobile */}
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
+              {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(num => (
+                <button
+                  key={num}
+                  type="button"
+                  onClick={e => { e.preventDefault(); e.stopPropagation(); handleKeypadPress(String(num)); }}
+                  className="hf-btn hf-btn-ghost"
+                  style={{
+                    height: 42,
+                    fontSize: 16,
+                    fontWeight: 700,
+                    justifyContent: "center",
+                    borderRadius: 8,
+                    background: "var(--surface-hover)",
+                  }}
+                >
+                  {num}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={e => { e.preventDefault(); e.stopPropagation(); handleClear(); }}
+                className="hf-btn hf-btn-ghost"
+                style={{ height: 42, fontSize: 12, fontWeight: 600, justifyContent: "center", borderRadius: 8, color: "var(--ink-soft)" }}
+              >
+                Clear
+              </button>
+              <button
+                type="button"
+                onClick={e => { e.preventDefault(); e.stopPropagation(); handleKeypadPress("0"); }}
+                className="hf-btn hf-btn-ghost"
+                style={{ height: 42, fontSize: 16, fontWeight: 700, justifyContent: "center", borderRadius: 8, background: "var(--surface-hover)" }}
+              >
+                0
+              </button>
+              <button
+                type="button"
+                onClick={e => { e.preventDefault(); e.stopPropagation(); handleBackspace(); }}
+                className="hf-btn hf-btn-ghost"
+                style={{ height: 42, fontSize: 13, fontWeight: 600, justifyContent: "center", borderRadius: 8, color: "var(--red)" }}
+              >
+                ⌫ Del
+              </button>
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <button
+              type="button"
+              className="hf-btn hf-btn-ghost"
+              style={{ justifyContent: "center", minHeight: 44 }}
+              onClick={e => { e.stopPropagation(); onCancel(); }}
+            >
               Cancel
             </button>
-            <button type="submit" className="hf-btn hf-btn-primary" disabled={isVerifying || !pin}>
-              <Check size={14} /> {isVerifying ? "Verifying..." : "Authorize & Proceed"}
+            <button
+              type="submit"
+              className="hf-btn hf-btn-primary"
+              style={{ justifyContent: "center", minHeight: 44 }}
+              disabled={isVerifying || !pin}
+            >
+              <Check size={16} /> {isVerifying ? "Verifying..." : "Authorize"}
             </button>
           </div>
         </form>
@@ -3622,7 +3710,7 @@ function Inventory({ db, setDb, role, notify, currentUser, onReceiveShortcut }) 
     });
   }
 
-  /* ---------- Clear All Inventory & Stock with Store PIN ---------- */
+  /* ---------- 1. Wipe Entire Inventory & Stock with Store PIN ---------- */
   function handleClearAllInventory() {
     if ((db.products || []).length === 0) {
       notify("info", "Inventory Empty", "There are no products in inventory.");
@@ -3666,6 +3754,67 @@ function Inventory({ db, setDb, role, notify, currentUser, onReceiveShortcut }) 
     });
   }
 
+  /* ---------- 2. Reset All Stock Quantities to 0 with Store PIN ---------- */
+  function handleZeroOutAllStock() {
+    if ((db.products || []).length === 0) {
+      notify("info", "Inventory Empty", "There are no products in inventory.");
+      return;
+    }
+
+    const totalUnits = (db.products || []).reduce((a, p) => a + (Number(p.stock) || 0), 0);
+    const totalCount = (db.products || []).length;
+
+    setPinModal({
+      isOpen: true,
+      title: "Authorize Reset Stock to Zero",
+      description: `WARNING: Enter Store Security PIN to reset stock counts to 0 for all ${totalCount} products (${totalUnits.toLocaleString()} units). Product catalog names and prices will remain intact.`,
+      onSuccess: () => {
+        const operator = currentUser?.name || (role === "owner" ? "Shop Owner" : "Owner");
+        const today = todayISO(0);
+        const timeStr = new Date().toTimeString().slice(0, 5);
+
+        setDb(prev => ({
+          ...prev,
+          products: (prev.products || []).map(p => ({
+            ...p,
+            stock: 0,
+            history: [
+              ...(p.history || []),
+              {
+                id: uid("ADJ"),
+                date: today,
+                time: timeStr,
+                action: "Adjustment",
+                ref: "ZERO-ALL",
+                qty: -(Number(p.stock) || 0),
+                balance: 0,
+                user: operator,
+                reason: "Bulk stock reset to 0 authorized via Store PIN",
+              }
+            ]
+          })),
+          auditLog: [
+            {
+              id: uid("LOG"),
+              time: `${today} ${timeStr}`,
+              user: operator,
+              role: role === "owner" ? "Owner" : "Storekeeper",
+              category: "Stock Adjustment",
+              action: `Reset all stock quantities to 0 across ${totalCount} products`,
+              detail: `Prior stock cleared (${totalUnits.toLocaleString()} units) — Verified via Store PIN`,
+              target: "All Stock",
+            },
+            ...(prev.auditLog || [])
+          ]
+        }));
+
+        setSelected(null);
+        setPinModal({ isOpen: false, title: "", description: "", onSuccess: () => {} });
+        notify("success", "Stock Reset to Zero", `All stock counts have been reset to 0 across ${totalCount} products.`);
+      }
+    });
+  }
+
   function downloadPDF() {
     exportInventoryPDF({ products: filtered, suppliers: db.suppliers });
     notify("success", "Inventory PDF Downloaded", `${filtered.length} products exported.`);
@@ -3682,8 +3831,8 @@ function Inventory({ db, setDb, role, notify, currentUser, onReceiveShortcut }) 
         db={db}
       />
 
-      {/* Header & Actions */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
+      {/* Desktop Header & Actions */}
+      <div className="hf-desktop-only" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
         <div>
           <div className="disp" style={{ fontSize: 28, fontWeight: 700 }}>Real-Time Stock & Inventory</div>
           <div style={{ color: "var(--ink-soft)", fontSize: 13, marginTop: 2 }}>
@@ -3700,6 +3849,15 @@ function Inventory({ db, setDb, role, notify, currentUser, onReceiveShortcut }) 
           >
             <Trash2 size={14} /> Clear All Inventory
           </button>
+          <button
+            type="button"
+            className="hf-btn hf-btn-ghost"
+            style={{ color: "var(--amber)", borderColor: "var(--amber)" }}
+            onClick={handleZeroOutAllStock}
+            title="Reset all product stock counts to 0 (Requires PIN)"
+          >
+            <AlertTriangle size={14} /> Reset Stock to 0
+          </button>
           <button className="hf-btn hf-btn-ghost" onClick={() => setShowImport(true)}>
             <FileSpreadsheet size={15} color="var(--green)" /> Import Excel / CSV
           </button>
@@ -3711,6 +3869,76 @@ function Inventory({ db, setDb, role, notify, currentUser, onReceiveShortcut }) 
           </button>
           <button className="hf-btn hf-btn-primary" onClick={() => setShowNew(true)}>
             <Plus size={15} /> Add New Product
+          </button>
+        </div>
+      </div>
+
+      {/* Mobile Top Header & Quick Action Buttons (Touch-Optimized for Phones) */}
+      <div className="hf-mobile-only" style={{ marginBottom: 14 }}>
+        <div style={{ marginBottom: 10 }}>
+          <div className="disp" style={{ fontSize: 22, fontWeight: 700 }}>Stock & Inventory</div>
+          <div style={{ color: "var(--ink-soft)", fontSize: 12 }}>
+            Real-time catalog, live stock balance & rapid restock
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+          <button
+            type="button"
+            className="hf-btn hf-btn-primary"
+            style={{ justifyContent: "center", fontSize: 13, minHeight: 44 }}
+            onClick={() => setShowNew(true)}
+          >
+            <Plus size={16} /> Add Product
+          </button>
+          <button
+            type="button"
+            className="hf-btn hf-btn-ghost"
+            style={{ justifyContent: "center", fontSize: 13, minHeight: 44 }}
+            onClick={() => { setAdjustProduct(null); setShowAdjustment(true); }}
+          >
+            <SlidersHorizontal size={15} /> Adjust Stock
+          </button>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+          <button
+            type="button"
+            className="hf-btn hf-btn-ghost"
+            style={{ justifyContent: "center", fontSize: 12, minHeight: 40 }}
+            onClick={() => setShowImport(true)}
+          >
+            <FileSpreadsheet size={14} color="var(--green)" /> Excel Import
+          </button>
+          <button
+            type="button"
+            className="hf-btn hf-btn-ghost"
+            style={{ justifyContent: "center", fontSize: 12, minHeight: 40 }}
+            onClick={downloadPDF}
+          >
+            <Download size={14} /> Export PDF
+          </button>
+        </div>
+
+        {/* Mobile Clear / Wipe Actions Row */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, padding: "8px", background: "var(--surface-hover)", borderRadius: 10, border: "1px solid var(--line)" }}>
+          <button
+            type="button"
+            className="hf-btn hf-btn-ghost"
+            style={{ justifyContent: "center", fontSize: 11.5, minHeight: 38, color: "var(--red)", borderColor: "rgba(220,50,50,0.3)" }}
+            onClick={handleClearAllInventory}
+            title="Wipe entire inventory catalog and stock records (Requires PIN)"
+          >
+            <Trash2 size={13} /> Wipe All Items
+          </button>
+          <button
+            type="button"
+            className="hf-btn hf-btn-ghost"
+            style={{ justifyContent: "center", fontSize: 11.5, minHeight: 38, color: "var(--amber)", borderColor: "rgba(217,119,6,0.3)" }}
+            onClick={handleZeroOutAllStock}
+            title="Reset stock balances to 0 (Requires PIN)"
+          >
+            <AlertTriangle size={13} /> Reset Stock to 0
           </button>
         </div>
       </div>
@@ -7789,7 +8017,22 @@ const NAV = [
 
 export default function App() {
   const [db, setDb, loading] = useDB();
-  const [page, setPage] = useState("dashboard");
+  const [page, setPage] = useState(() => {
+    try {
+      const hash = window.location.hash.replace("#", "").trim().toLowerCase();
+      if (hash && NAV.some(n => n.key === hash)) {
+        return hash;
+      }
+      const saved = localStorage.getItem(PAGE_KEY);
+      if (saved && NAV.some(n => n.key === saved)) {
+        return saved;
+      }
+    } catch {
+      // fallback
+    }
+    return "dashboard";
+  });
+
   const [toasts, setToasts] = useState([]);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [showAlertsFlyout, setShowAlertsFlyout] = useState(false);
@@ -7797,6 +8040,33 @@ export default function App() {
 
   // Progressive Web App Install hook
   const { isInstallable, isInstalled, promptInstall } = usePWAInstall();
+
+  // Sync active page across refreshes and URL hash
+  useEffect(() => {
+    try {
+      localStorage.setItem(PAGE_KEY, page);
+      if (window.location.hash !== `#${page}`) {
+        window.location.hash = page;
+      }
+    } catch (e) {
+      console.warn("Could not sync page state:", e);
+    }
+  }, [page]);
+
+  useEffect(() => {
+    function handleHashChange() {
+      try {
+        const hash = window.location.hash.replace("#", "").trim().toLowerCase();
+        if (hash && NAV.some(n => n.key === hash)) {
+          setPage(hash);
+        }
+      } catch (e) {
+        console.warn("Hash change error:", e);
+      }
+    }
+    window.addEventListener("hashchange", handleHashChange);
+    return () => window.removeEventListener("hashchange", handleHashChange);
+  }, []);
 
   const [theme, setTheme] = useState(() => {
     try {
