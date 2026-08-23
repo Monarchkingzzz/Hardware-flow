@@ -3490,6 +3490,12 @@ function Inventory({ db, setDb, role, notify, currentUser, onReceiveShortcut }) 
   const [showImport, setShowImport] = useState(false);
   const [showAdjustment, setShowAdjustment] = useState(false);
   const [adjustProduct, setAdjustProduct] = useState(null);
+  const [pinModal, setPinModal] = useState({
+    isOpen: false,
+    title: "",
+    description: "",
+    onSuccess: () => {},
+  });
 
   const canSeeCost = role === "owner" || role === "storekeeper";
 
@@ -3577,36 +3583,87 @@ function Inventory({ db, setDb, role, notify, currentUser, onReceiveShortcut }) 
     setShowNew(false);
   }
 
+  /* ---------- Delete Individual Product with Store PIN ---------- */
   function deleteProduct(productId) {
-    const prod = db.products.find(p => p.id === productId);
+    const prod = (db.products || []).find(p => p.id === productId);
     if (!prod) return;
 
-    if (!confirm(`Are you sure you want to permanently remove "${prod.name}" (${prod.sku}) from inventory? This action cannot be undone.`)) {
+    setPinModal({
+      isOpen: true,
+      title: "Authorize Product Deletion",
+      description: `Enter Store Security PIN to permanently delete "${prod.name}" (${prod.sku}) and its movement history from inventory.`,
+      onSuccess: () => {
+        const operator = currentUser?.name || (role === "owner" ? "Shop Owner" : "Staff");
+        const today = todayISO(0);
+        const timeStr = new Date().toTimeString().slice(0, 5);
+
+        setDb(prev => ({
+          ...prev,
+          products: (prev.products || []).filter(p => p.id !== productId),
+          auditLog: [
+            {
+              id: uid("LOG"),
+              time: `${today} ${timeStr}`,
+              user: operator,
+              role: role === "owner" ? "Owner" : "Storekeeper",
+              category: "Product Removal",
+              action: `Removed product from inventory: ${prod.name}`,
+              detail: `SKU: ${prod.sku} · Prior stock: ${prod.stock} ${prod.baseUnit} — Verified via Store PIN`,
+              target: prod.name,
+            },
+            ...(prev.auditLog || [])
+          ]
+        }));
+
+        notify("success", "Product Removed", `"${prod.name}" has been deleted from inventory.`);
+        setSelected(null);
+        setPinModal({ isOpen: false, title: "", description: "", onSuccess: () => {} });
+      }
+    });
+  }
+
+  /* ---------- Clear All Inventory & Stock with Store PIN ---------- */
+  function handleClearAllInventory() {
+    if ((db.products || []).length === 0) {
+      notify("info", "Inventory Empty", "There are no products in inventory.");
       return;
     }
 
-    const operator = currentUser?.name || (role === "owner" ? "Shop Owner" : "Staff");
+    const totalCount = (db.products || []).length;
+    const totalUnits = (db.products || []).reduce((a, p) => a + (Number(p.stock) || 0), 0);
 
-    setDb(prev => ({
-      ...prev,
-      products: prev.products.filter(p => p.id !== productId),
-      auditLog: [
-        {
-          id: uid("LOG"),
-          time: todayISO(0) + " " + new Date().toTimeString().slice(0, 5),
-          user: operator,
-          role: role === "owner" ? "Owner" : "Storekeeper",
-          category: "Product Removal",
-          action: `Removed product from inventory: ${prod.name}`,
-          detail: `SKU: ${prod.sku} · Prior stock: ${prod.stock} ${prod.baseUnit}`,
-          target: prod.name,
-        },
-        ...prev.auditLog
-      ]
-    }));
+    setPinModal({
+      isOpen: true,
+      title: "Authorize Wipe Entire Inventory & Stock",
+      description: `WARNING: Enter Store Security PIN to permanently delete all ${totalCount} products (${totalUnits.toLocaleString()} units) and wipe inventory stock records. This cannot be undone.`,
+      onSuccess: () => {
+        const operator = currentUser?.name || (role === "owner" ? "Shop Owner" : "Owner");
+        const today = todayISO(0);
+        const timeStr = new Date().toTimeString().slice(0, 5);
 
-    notify("success", "Product Removed", `"${prod.name}" has been deleted from inventory.`);
-    setSelected(null);
+        setDb(prev => ({
+          ...prev,
+          products: [],
+          auditLog: [
+            {
+              id: uid("LOG"),
+              time: `${today} ${timeStr}`,
+              user: operator,
+              role: role === "owner" ? "Owner" : "Storekeeper",
+              category: "Bulk Inventory Deletion",
+              action: `Wiped entire product inventory (${totalCount} products removed)`,
+              detail: `All product catalog and stock records cleared — Verified via Store PIN`,
+              target: "All Products",
+            },
+            ...(prev.auditLog || [])
+          ]
+        }));
+
+        setSelected(null);
+        setPinModal({ isOpen: false, title: "", description: "", onSuccess: () => {} });
+        notify("success", "Inventory Cleared", `All ${totalCount} products have been permanently wiped from inventory.`);
+      }
+    });
   }
 
   function downloadPDF() {
@@ -3616,6 +3673,15 @@ function Inventory({ db, setDb, role, notify, currentUser, onReceiveShortcut }) 
 
   return (
     <div>
+      <PinVerificationModal
+        isOpen={pinModal.isOpen}
+        title={pinModal.title}
+        description={pinModal.description}
+        onSuccess={pinModal.onSuccess}
+        onCancel={() => setPinModal({ isOpen: false, title: "", description: "", onSuccess: () => {} })}
+        db={db}
+      />
+
       {/* Header & Actions */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
         <div>
@@ -3625,6 +3691,15 @@ function Inventory({ db, setDb, role, notify, currentUser, onReceiveShortcut }) 
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            className="hf-btn hf-btn-ghost"
+            style={{ color: "var(--red)", borderColor: "var(--red)" }}
+            onClick={handleClearAllInventory}
+            title="Wipe entire inventory & stock (Requires PIN)"
+          >
+            <Trash2 size={14} /> Clear All Inventory
+          </button>
           <button className="hf-btn hf-btn-ghost" onClick={() => setShowImport(true)}>
             <FileSpreadsheet size={15} color="var(--green)" /> Import Excel / CSV
           </button>
