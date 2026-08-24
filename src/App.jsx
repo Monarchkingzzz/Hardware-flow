@@ -28,7 +28,15 @@ import { autoSyncDatabase, pullDatabaseFromSupabase, subscribeToSupabaseRealtime
 import { hashPassword, sanitizeUserForSession, verifyActionPin, validateCustomerDebtRepayment, validateSupplierPayment } from "./utils/security";
 import { useOnlineStatus, enqueueOfflineSale, syncOfflineQueue } from "./utils/offlineSync";
 import { usePWAInstall } from "./utils/usePWAInstall";
-import { downloadExcelTemplate, downloadCSVTemplate, parseProductFile } from "./utils/excelImport";
+import {
+  downloadExcelTemplate,
+  downloadCSVTemplate,
+  inspectWorkbook,
+  analyzeColumnsAndSuggestMapping,
+  processDataWithMapping,
+  exportInvalidRowsCSV,
+  CANONICAL_FIELDS
+} from "./utils/excelImport";
 
 /* ---------------------------------------------------------------
    HardwareFlow — Business Management System
@@ -3313,31 +3321,73 @@ function StockAdjustmentModal({ db, setDb, initialProduct, onCancel, notify, cur
   );
 }
 
-/* ================= EXCEL & CSV BULK IMPORT MODULE ================= */
+/* ================= INTELLIGENT ANY-EXCEL BULK IMPORT WIZARD ================= */
 function ExcelImportModal({ db, setDb, onCancel, notify, currentUser, role }) {
+  const [step, setStep] = useState("upload"); // "upload" | "mapping" | "review"
   const [file, setFile] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
   const [parsing, setParsing] = useState(false);
-  const [parsedData, setParsedData] = useState(null);
   const [parseError, setParseError] = useState("");
-  const [defaultSupplierId, setDefaultSupplierId] = useState("");
-  const [defaultCategory, setDefaultCategory] = useState("");
+
+  // Workbook & Multi-sheet state
+  const [workbookMeta, setWorkbookMeta] = useState(null);
+  const [selectedSheets, setSelectedSheets] = useState([]);
+
+  // Column Mapping state: { [colIndex]: fieldKey }
+  const [columnMapping, setColumnMapping] = useState({});
+  const [columnAnalysis, setColumnAnalysis] = useState([]);
+
+  // Global Defaults & Fallbacks
+  const [globalDefaults, setGlobalDefaults] = useState({
+    defaultCategory: "General",
+    defaultSupplierId: "",
+    defaultMinStock: "10",
+    defaultUnit: "piece",
+    autoMarkupPercent: "20",
+  });
+
+  // Processed / Validated rows
+  const [processedResult, setProcessedResult] = useState(null);
+  const [activeReviewTab, setActiveReviewTab] = useState("valid"); // "valid" | "invalid"
+  const [reviewSearch, setReviewSearch] = useState("");
   const [isImporting, setIsImporting] = useState(false);
 
   const fileInputRef = useRef(null);
 
+  /* ---------- 1. Handle File Upload & Workbook Inspection ---------- */
   async function handleFileSelect(selectedFile) {
     if (!selectedFile) return;
     setFile(selectedFile);
     setParseError("");
     setParsing(true);
+
     try {
-      const result = await parseProductFile(selectedFile);
-      setParsedData(result);
+      const meta = await inspectWorkbook(selectedFile);
+      setWorkbookMeta(meta);
+
+      // Default select all detected sheets
+      setSelectedSheets(meta.sheetNames);
+
+      // Auto-analyze headers and suggest mappings using first selected sheet
+      const primarySheet = meta.sheetsData[0];
+      if (!primarySheet || primarySheet.headers.length === 0) {
+        throw new Error("No column headers detected in the uploaded file.");
+      }
+
+      const suggestions = analyzeColumnsAndSuggestMapping(primarySheet.headers, primarySheet.sampleRows);
+      setColumnAnalysis(suggestions);
+
+      const initialMap = {};
+      suggestions.forEach(s => {
+        initialMap[s.columnIndex] = s.suggestedField || "skip";
+      });
+      setColumnMapping(initialMap);
+
+      setStep("mapping");
     } catch (err) {
-      console.error("Excel import parse error:", err);
-      setParseError(err.message || "Failed to parse file. Please verify format.");
-      setParsedData(null);
+      console.error("Excel import inspection error:", err);
+      setParseError(err.message || "Failed to inspect file. Please verify it is a valid Excel or CSV spreadsheet.");
+      setWorkbookMeta(null);
     } finally {
       setParsing(false);
     }
@@ -3351,9 +3401,42 @@ function ExcelImportModal({ db, setDb, onCancel, notify, currentUser, role }) {
     }
   }
 
+  function toggleSheetSelection(sheetName) {
+    setSelectedSheets(prev => {
+      if (prev.includes(sheetName)) {
+        if (prev.length === 1) {
+          notify("warning", "Sheet Required", "At least one sheet must be selected.");
+          return prev;
+        }
+        return prev.filter(s => s !== sheetName);
+      }
+      return [...prev, sheetName];
+    });
+  }
+
+  /* ---------- 2. Proceed to Review & Validation Step ---------- */
+  function handleProceedToReview() {
+    if (!workbookMeta) return;
+
+    // Verify product name is mapped
+    const hasNameMapping = Object.values(columnMapping).some(f => f === "name");
+    if (!hasNameMapping) {
+      notify("error", "Product Name Required", "Please map at least one column to 'Product Name' so items can be identified.");
+      return;
+    }
+
+    const filteredSheetsData = workbookMeta.sheetsData.filter(s => selectedSheets.includes(s.sheetName));
+    const processed = processDataWithMapping(filteredSheetsData, columnMapping, globalDefaults);
+
+    setProcessedResult(processed);
+    setStep("review");
+    setActiveReviewTab(processed.validRows.length > 0 ? "valid" : "invalid");
+  }
+
+  /* ---------- 3. Execute Import into Database ---------- */
   function handleExecuteImport() {
-    if (!parsedData || parsedData.validRows.length === 0) {
-      notify("warning", "No Valid Rows", "There are no valid products to import.");
+    if (!processedResult || processedResult.validRows.length === 0) {
+      notify("warning", "No Valid Products", "There are no valid products to import.");
       return;
     }
 
@@ -3364,30 +3447,27 @@ function ExcelImportModal({ db, setDb, onCancel, notify, currentUser, role }) {
 
     const newProducts = [];
 
-    parsedData.validRows.forEach((r, idx) => {
+    processedResult.validRows.forEach(r => {
       const pId = uid("P");
-      const sku = r.sku || `SKU-${Math.floor(1000 + Math.random() * 9000)}`;
-      const prodCategory = r.category || defaultCategory || "General";
-      const supplierId = r.supplierId || defaultSupplierId || "";
       const stock = Number(r.stock) || 0;
 
       newProducts.push({
         id: pId,
         name: r.name,
-        category: prodCategory,
+        category: r.category || "General",
         brand: r.brand || "Standard",
-        sku: sku,
-        description: r.description || `Imported product: ${r.name}`,
+        sku: r.sku || uid("SKU"),
+        description: r.description || `Imported: ${r.name}`,
         baseUnit: r.baseUnit || "piece",
         purchaseUnit: r.purchaseUnit || r.baseUnit || "piece",
-        conversionFactor: Number(r.conversionFactor) > 0 ? Number(r.conversionFactor) : 1,
+        conversionFactor: 1,
         buyPrice: Number(r.buyPrice) || 0,
         sellPrice: Number(r.sellPrice) || 0,
         contractorPrice: Number(r.contractorPrice) || Number(r.sellPrice) || 0,
         wholesalePrice: Number(r.wholesalePrice) || Number(r.sellPrice) || 0,
         minStock: Number(r.minStock) || 10,
         stock: stock,
-        supplierId: supplierId,
+        supplierId: r.supplierId || "",
         location: r.location || "Main Store",
         history: [
           {
@@ -3399,7 +3479,7 @@ function ExcelImportModal({ db, setDb, onCancel, notify, currentUser, role }) {
             qty: stock,
             balance: stock,
             user: operator,
-            reason: `Bulk onboard from ${parsedData.filename}`,
+            reason: `Batch onboarding from ${workbookMeta?.filename || 'spreadsheet'}`,
           }
         ],
       });
@@ -3415,198 +3495,548 @@ function ExcelImportModal({ db, setDb, onCancel, notify, currentUser, role }) {
           user: operator,
           role: role === "owner" ? "Owner" : "Storekeeper",
           category: "Bulk Import",
-          action: `Imported ${newProducts.length} product(s) from Excel/CSV`,
-          detail: `File: ${parsedData.filename} · Total stock value added: ${fmt(newProducts.reduce((a, p) => a + getProductStockValue(p), 0))}`,
+          action: `Imported ${newProducts.length} product(s) via Intelligent Excel Importer`,
+          detail: `File: ${workbookMeta?.filename} · Added stock value: ${fmt(processedResult.totalEstimatedStockValue)}`,
           target: `${newProducts.length} Products`,
         },
         ...prev.auditLog
       ]
     }));
 
-    notify("success", "Bulk Import Successful", `Successfully imported ${newProducts.length} products into your inventory!`);
+    notify("success", "Bulk Import Successful", `Successfully imported ${newProducts.length} products into inventory!`);
     setIsImporting(false);
     onCancel();
   }
 
+  // Count recognized vs skipped columns
+  const mappedCount = Object.values(columnMapping).filter(f => f && f !== "skip").length;
+  const skippedCount = Object.values(columnMapping).filter(f => !f || f === "skip").length;
+
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(20,24,30,0.6)", backdropFilter: "blur(2px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1300 }} onClick={onCancel}>
-      <div className="hf-card hf-modal-card" style={{ width: 780, maxWidth: "96vw", maxHeight: "92vh", overflowY: "auto", padding: "24px 20px", display: "flex", flexDirection: "column" }} onClick={e => e.stopPropagation()}>
-        {/* Header */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
+    <div style={{ position: "fixed", inset: 0, background: "rgba(20,24,30,0.65)", backdropFilter: "blur(3px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1300 }} onClick={onCancel}>
+      <div className="hf-card hf-modal-card" style={{ width: 880, maxWidth: "96vw", height: "92vh", maxHeight: 800, padding: "22px 20px", display: "flex", flexDirection: "column" }} onClick={e => e.stopPropagation()}>
+        {/* Top Header & Wizard Step Progress */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
           <div>
-            <div className="disp" style={{ fontSize: 24, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>
+            <div className="disp" style={{ fontSize: 23, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>
               <FileSpreadsheet size={24} color="var(--green)" />
-              <span>Import Products from Excel / CSV</span>
+              <span>Smart Excel & CSV Inventory Importer</span>
             </div>
-            <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2 }}>
-              Onboard hundreds of hardware products in seconds with automatic column mapping and opening stock tracking.
+            <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 2 }}>
+              Upload any hardware price list or stock sheet — automatic column recognition, currency cleaning & custom mapping.
             </div>
           </div>
           <button onClick={onCancel} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><X size={20} /></button>
         </div>
 
-        {/* Template Downloads & Guidance Bar */}
-        <div style={{ background: "var(--surface-hover)", border: "1.5px dashed var(--line)", borderRadius: 10, padding: "12px 16px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
-          <div>
-            <div style={{ fontWeight: 600, fontSize: 13 }}>Download Standard Hardware Template</div>
-            <div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Columns: Product Name, Category, Unit, Cost Price, Retail Price, Contractor, Wholesale, Opening Stock, Reorder Level</div>
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button type="button" className="hf-btn hf-btn-ghost" style={{ fontSize: 12 }} onClick={downloadExcelTemplate}>
-              <Download size={14} color="var(--green)" /> Excel Template (.xlsx)
-            </button>
-            <button type="button" className="hf-btn hf-btn-ghost" style={{ fontSize: 12 }} onClick={downloadCSVTemplate}>
-              <Download size={14} /> CSV Template (.csv)
-            </button>
-          </div>
+        {/* Wizard Step Progress Pills */}
+        <div style={{ display: "flex", gap: 6, marginBottom: 14, background: "var(--surface-hover)", padding: 4, borderRadius: 10, border: "1px solid var(--line)" }}>
+          {[
+            { key: "upload", label: "1. Upload File & Sheets" },
+            { key: "mapping", label: "2. Map Inventory Columns" },
+            { key: "review", label: "3. Validate & Import" },
+          ].map(s => {
+            const isActive = step === s.key;
+            return (
+              <div
+                key={s.key}
+                style={{
+                  flex: 1,
+                  textAlign: "center",
+                  padding: "6px 8px",
+                  fontSize: 12,
+                  fontWeight: isActive ? 700 : 500,
+                  borderRadius: 7,
+                  background: isActive ? "var(--rust)" : "transparent",
+                  color: isActive ? "#fff" : "var(--ink-soft)",
+                  transition: "all .12s ease",
+                }}
+              >
+                {s.label}
+              </div>
+            );
+          })}
         </div>
 
-        {/* File Dropzone */}
-        {!parsedData && (
-          <div
-            onDragOver={e => { e.preventDefault(); setIsDragging(true); }}
-            onDragLeave={() => setIsDragging(false)}
-            onDrop={handleDrop}
-            onClick={() => fileInputRef.current?.click()}
-            style={{
-              border: isDragging ? "2px solid var(--rust)" : "2px dashed var(--line)",
-              background: isDragging ? "var(--surface-hover)" : "var(--surface)",
-              borderRadius: 12,
-              padding: "36px 20px",
-              textAlign: "center",
-              cursor: "pointer",
-              marginBottom: 16,
-              transition: "all .15s ease",
-            }}
-          >
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".xlsx, .xls, .csv"
-              style={{ display: "none" }}
-              onChange={e => e.target.files?.[0] && handleFileSelect(e.target.files[0])}
-            />
-            <UploadCloud size={38} color="var(--rust)" style={{ margin: "0 auto 10px" }} />
-            <div style={{ fontWeight: 700, fontSize: 15 }}>
-              {parsing ? "Parsing spreadsheet..." : "Click or drag & drop Excel / CSV file here"}
-            </div>
-            <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 4 }}>
-              Supports Microsoft Excel (.xlsx, .xls) and Comma-Separated Values (.csv)
-            </div>
-          </div>
-        )}
-
-        {parseError && (
-          <div className="hf-card" style={{ padding: "12px 14px", borderLeft: "3px solid var(--red)", marginBottom: 14, color: "var(--red)", fontSize: 13 }}>
-            <AlertTriangle size={15} style={{ display: "inline", verticalAlign: "middle", marginRight: 6 }} />
-            {parseError}
-          </div>
-        )}
-
-        {/* Preview of Parsed Rows */}
-        {parsedData && (
-          <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <FileCheck size={18} color="var(--green)" />
-                <span style={{ fontWeight: 700, fontSize: 14 }}>{parsedData.filename}</span>
-                <Pill tone="green">{parsedData.validRows.length} valid product(s)</Pill>
-                {parsedData.invalidRows.length > 0 && <Pill tone="red">{parsedData.invalidRows.length} invalid</Pill>}
-              </div>
-              <button className="hf-btn hf-btn-ghost" style={{ fontSize: 12 }} onClick={() => { setParsedData(null); setFile(null); }}>
-                Choose Different File
-              </button>
-            </div>
-
-            {/* Global Assignment Options */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, background: "var(--surface-hover)", padding: 12, borderRadius: 8, marginBottom: 12 }}>
+        {/* ================= STEP 1: UPLOAD & SHEET SELECTION ================= */}
+        {step === "upload" && (
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", overflowY: "auto" }}>
+            {/* Template Download Bar */}
+            <div style={{ background: "var(--surface-hover)", border: "1.5px dashed var(--line)", borderRadius: 10, padding: "12px 14px", marginBottom: 14, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
               <div>
-                <div className="hf-kpi-label" style={{ marginBottom: 3 }}>Default Supplier (if empty in file)</div>
-                <select className="hf-input" value={defaultSupplierId} onChange={e => setDefaultSupplierId(e.target.value)}>
-                  <option value="">None / Unassigned</option>
-                  {db.suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                </select>
+                <div style={{ fontWeight: 600, fontSize: 12.5 }}>Want to start with a blank ready-to-use template?</div>
+                <div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Download our pre-formatted spreadsheet with Kenyan hardware sample items.</div>
               </div>
-              <div>
-                <div className="hf-kpi-label" style={{ marginBottom: 3 }}>Default Category (if empty in file)</div>
-                <input className="hf-input" placeholder="e.g. General, Hardware" value={defaultCategory} onChange={e => setDefaultCategory(e.target.value)} />
+              <div style={{ display: "flex", gap: 8 }}>
+                <button type="button" className="hf-btn hf-btn-ghost" style={{ fontSize: 11.5 }} onClick={downloadExcelTemplate}>
+                  <Download size={13} color="var(--green)" /> Excel Template (.xlsx)
+                </button>
+                <button type="button" className="hf-btn hf-btn-ghost" style={{ fontSize: 11.5 }} onClick={downloadCSVTemplate}>
+                  <Download size={13} /> CSV Template (.csv)
+                </button>
               </div>
             </div>
 
-            {/* Preview Table */}
-            <div style={{ maxHeight: 260, overflowY: "auto", border: "1px solid var(--line)", borderRadius: 8, marginBottom: 14 }}>
-              <table className="hf-table" style={{ fontSize: 12 }}>
-                <thead>
-                  <tr>
-                    <th style={{ width: 35 }}>#</th>
-                    <th>Product Name</th>
-                    <th>Category</th>
-                    <th>Unit</th>
-                    <th>Cost Price</th>
-                    <th>Retail Price</th>
-                    <th>Contractor</th>
-                    <th>Opening Stock</th>
-                    <th>Reorder Level</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {parsedData.validRows.map((r, i) => (
-                    <tr key={i}>
-                      <td className="mono" style={{ color: "var(--ink-soft)" }}>{r._rowNumber}</td>
-                      <td>
-                        <strong>{r.name}</strong>
-                        {r.brand && <span style={{ color: "var(--ink-soft)", fontSize: 11 }}> ({r.brand})</span>}
-                      </td>
-                      <td>{r.category}</td>
-                      <td className="mono">{r.baseUnit}</td>
-                      <td className="mono">{fmt(r.buyPrice)}</td>
-                      <td className="mono text-profit" style={{ fontWeight: 600 }}>{fmt(r.sellPrice)}</td>
-                      <td className="mono">{fmt(r.contractorPrice)}</td>
-                      <td className="mono" style={{ fontWeight: 700 }}>{r.stock}</td>
-                      <td className="mono" style={{ color: "var(--ink-soft)" }}>{r.minStock}</td>
-                      <td>
-                        <span style={{ color: "var(--green)", fontWeight: 600 }}>✓ Ready</span>
-                      </td>
-                    </tr>
-                  ))}
-                  {parsedData.invalidRows.map((r, i) => (
-                    <tr key={"inv-" + i} style={{ background: "rgba(220, 50, 50, 0.05)" }}>
-                      <td className="mono" style={{ color: "var(--red)" }}>{r._rowNumber}</td>
-                      <td style={{ color: "var(--red)" }}><strong>{r.name || "Missing Name"}</strong></td>
-                      <td>{r.category}</td>
-                      <td>{r.baseUnit}</td>
-                      <td>{fmt(r.buyPrice)}</td>
-                      <td>{fmt(r.sellPrice)}</td>
-                      <td>—</td>
-                      <td>{r.stock}</td>
-                      <td>{r.minStock}</td>
-                      <td><Pill tone="red">INVALID</Pill></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            {/* Drag & Drop File Zone */}
+            <div
+              onDragOver={e => { e.preventDefault(); setIsDragging(true); }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={handleDrop}
+              onClick={() => fileInputRef.current?.click()}
+              style={{
+                border: isDragging ? "2px solid var(--rust)" : "2px dashed var(--line)",
+                background: isDragging ? "var(--surface-hover)" : "var(--surface)",
+                borderRadius: 12,
+                padding: "36px 20px",
+                textAlign: "center",
+                cursor: "pointer",
+                marginBottom: 14,
+                transition: "all .15s ease",
+              }}
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".xlsx, .xls, .csv"
+                style={{ display: "none" }}
+                onChange={e => e.target.files?.[0] && handleFileSelect(e.target.files[0])}
+              />
+              <UploadCloud size={40} color="var(--rust)" style={{ margin: "0 auto 10px" }} />
+              <div style={{ fontWeight: 700, fontSize: 15.5 }}>
+                {parsing ? "Scanning workbook structure..." : "Click or drag & drop Excel / CSV file here"}
+              </div>
+              <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 4 }}>
+                Supports Microsoft Excel (.xlsx, .xls) and Comma-Separated Values (.csv) with any column order or title rows.
+              </div>
             </div>
 
-            {parsedData.errors.length > 0 && (
-              <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginBottom: 12 }}>
-                ⚠️ {parsedData.errors.slice(0, 3).join("; ")}
+            {parseError && (
+              <div className="hf-card" style={{ padding: "12px 14px", borderLeft: "3px solid var(--red)", marginBottom: 14, color: "var(--red)", fontSize: 13 }}>
+                <AlertTriangle size={15} style={{ display: "inline", verticalAlign: "middle", marginRight: 6 }} />
+                {parseError}
               </div>
             )}
           </div>
         )}
 
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: "auto" }}>
-          <button className="hf-btn hf-btn-ghost" onClick={onCancel}>Cancel</button>
-          {parsedData && (
-            <button
-              className="hf-btn hf-btn-primary"
-              onClick={handleExecuteImport}
-              disabled={isImporting || parsedData.validRows.length === 0}
-            >
-              <Check size={16} /> Import {parsedData.validRows.length} Products
-            </button>
-          )}
+        {/* ================= STEP 2: INTERACTIVE COLUMN MAPPING ================= */}
+        {step === "mapping" && workbookMeta && (
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+            {/* Header info & Multi-sheet selector */}
+            <div style={{ background: "var(--surface-hover)", padding: "10px 14px", borderRadius: 9, marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
+                  <FileCheck size={16} color="var(--green)" />
+                  <span>{workbookMeta.filename}</span>
+                  <span style={{ fontSize: 11.5, color: "var(--ink-soft)", fontWeight: 500 }}>
+                    ({mappedCount} mapped, {skippedCount} ignored)
+                  </span>
+                </div>
+              </div>
+
+              {/* Multi-sheet selection checkboxes if more than 1 sheet */}
+              {workbookMeta.sheetNames.length > 1 && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 11.5, color: "var(--ink-soft)", fontWeight: 600 }}>Sheets:</span>
+                  {workbookMeta.sheetNames.map(sName => {
+                    const isChecked = selectedSheets.includes(sName);
+                    return (
+                      <label
+                        key={sName}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                          fontSize: 11.5,
+                          fontWeight: 600,
+                          cursor: "pointer",
+                          padding: "2px 8px",
+                          borderRadius: 6,
+                          background: isChecked ? "var(--rust-tint)" : "var(--surface)",
+                          color: isChecked ? "var(--rust)" : "var(--ink-soft)",
+                          border: "1px solid var(--line)"
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => toggleSheetSelection(sName)}
+                          style={{ cursor: "pointer" }}
+                        />
+                        {sName}
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Column Mapping Table */}
+            <div style={{ flex: 1, minHeight: 0, overflowY: "auto", border: "1px solid var(--line)", borderRadius: 8, marginBottom: 12 }}>
+              <table className="hf-table" style={{ fontSize: 12 }}>
+                <thead style={{ position: "sticky", top: 0, background: "var(--surface)", zIndex: 10 }}>
+                  <tr>
+                    <th style={{ width: "25%" }}>Excel Column Header</th>
+                    <th style={{ width: "25%" }}>Sample Data in File</th>
+                    <th style={{ width: "35%" }}>HardwareFlow Field</th>
+                    <th style={{ width: "15%", textAlign: "center" }}>Confidence</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {columnAnalysis.map(col => {
+                    const currentMapping = columnMapping[col.columnIndex] || "skip";
+                    const isMapped = currentMapping && currentMapping !== "skip";
+                    const isHighConfidence = col.confidence >= 90;
+
+                    return (
+                      <tr key={col.columnIndex} style={{ background: isMapped ? "transparent" : "var(--surface-hover)" }}>
+                        {/* Excel Header */}
+                        <td>
+                          <div style={{ fontWeight: 700, color: "var(--ink)" }}>{col.originalHeader}</div>
+                          <div style={{ fontSize: 10.5, color: "var(--ink-soft)" }}>Column {col.columnIndex + 1}</div>
+                        </td>
+
+                        {/* Sample Data */}
+                        <td>
+                          {col.sampleValues && col.sampleValues.length > 0 ? (
+                            <div style={{ fontSize: 11, color: "var(--ink-soft)", lineHeight: 1.4 }}>
+                              {col.sampleValues.slice(0, 3).map((v, vi) => (
+                                <div key={vi} style={{ textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap", maxWidth: 180 }}>
+                                  • {String(v)}
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <span style={{ fontStyle: "italic", color: "var(--ink-faint)", fontSize: 11 }}>Empty sample</span>
+                          )}
+                        </td>
+
+                        {/* Target Field Dropdown */}
+                        <td>
+                          <select
+                            className="hf-input"
+                            style={{
+                              fontSize: 12,
+                              fontWeight: isMapped ? 600 : 400,
+                              borderColor: isMapped ? "var(--rust)" : "var(--line)",
+                              background: isMapped ? "var(--surface)" : "var(--surface-hover)",
+                            }}
+                            value={currentMapping}
+                            onChange={e => {
+                              const newVal = e.target.value;
+                              setColumnMapping(prev => ({ ...prev, [col.columnIndex]: newVal }));
+                            }}
+                          >
+                            <option value="skip">[ Don't Import / Skip Column ]</option>
+                            <optgroup label="Essential Product Info">
+                              <option value="name">Product Name / Item Description *</option>
+                              <option value="sellPrice">Retail / Selling Price (KSh) *</option>
+                              <option value="buyPrice">Cost / Buying Price (KSh)</option>
+                              <option value="stock">Opening Stock Quantity</option>
+                            </optgroup>
+                            <optgroup label="Catalog & Classification">
+                              <option value="category">Category / Department</option>
+                              <option value="baseUnit">Unit of Measure (UOM)</option>
+                              <option value="minStock">Reorder Level / Min Alert</option>
+                              <option value="brand">Brand / Manufacturer</option>
+                              <option value="sku">Item Code / SKU / Barcode</option>
+                              <option value="location">Storage Location</option>
+                              <option value="description">Description / Notes</option>
+                            </optgroup>
+                            <optgroup label="Price Tiers & Supplier">
+                              <option value="contractorPrice">Contractor Discount Price</option>
+                              <option value="wholesalePrice">Wholesale / Bulk Price</option>
+                              <option value="supplier">Supplier Name</option>
+                            </optgroup>
+                          </select>
+                        </td>
+
+                        {/* Confidence Badge */}
+                        <td style={{ textAlign: "center" }}>
+                          {isMapped ? (
+                            isHighConfidence ? (
+                              <span style={{ fontSize: 11, background: "var(--green-tint)", color: "var(--green)", padding: "2px 6px", borderRadius: 4, fontWeight: 700 }}>
+                                🟢 {col.confidence}% Match
+                              </span>
+                            ) : (
+                              <span style={{ fontSize: 11, background: "var(--amber-tint)", color: "var(--amber)", padding: "2px 6px", borderRadius: 4, fontWeight: 700 }}>
+                                🟡 {col.confidence}% Guess
+                              </span>
+                            )
+                          ) : (
+                            <span style={{ fontSize: 10.5, color: "var(--ink-soft)" }}>
+                              ⚪ Ignored
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Global Defaults & Fallbacks Panel */}
+            <div style={{ background: "var(--surface-hover)", padding: "10px 14px", borderRadius: 9, marginBottom: 12 }}>
+              <div style={{ fontSize: 11.5, fontWeight: 700, color: "var(--ink)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.03em" }}>
+                Default Fallback Values (Used if columns are missing or empty in file)
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 8 }}>
+                <div>
+                  <div className="hf-kpi-label" style={{ marginBottom: 2 }}>Default Category</div>
+                  <input
+                    className="hf-input"
+                    style={{ fontSize: 12, padding: "5px 8px" }}
+                    placeholder="e.g. General"
+                    value={globalDefaults.defaultCategory}
+                    onChange={e => setGlobalDefaults({ ...globalDefaults, defaultCategory: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <div className="hf-kpi-label" style={{ marginBottom: 2 }}>Default Supplier</div>
+                  <select
+                    className="hf-input"
+                    style={{ fontSize: 12, padding: "5px 8px" }}
+                    value={globalDefaults.defaultSupplierId}
+                    onChange={e => setGlobalDefaults({ ...globalDefaults, defaultSupplierId: e.target.value })}
+                  >
+                    <option value="">None / Unassigned</option>
+                    {db.suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <div className="hf-kpi-label" style={{ marginBottom: 2 }}>Default Unit</div>
+                  <input
+                    className="hf-input"
+                    style={{ fontSize: 12, padding: "5px 8px" }}
+                    placeholder="piece, bag, kg"
+                    value={globalDefaults.defaultUnit}
+                    onChange={e => setGlobalDefaults({ ...globalDefaults, defaultUnit: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <div className="hf-kpi-label" style={{ marginBottom: 2 }}>Min Stock Alert Level</div>
+                  <input
+                    className="hf-input"
+                    type="number"
+                    style={{ fontSize: 12, padding: "5px 8px" }}
+                    placeholder="10"
+                    value={globalDefaults.defaultMinStock}
+                    onChange={e => setGlobalDefaults({ ...globalDefaults, defaultMinStock: e.target.value })}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ================= STEP 3: GRANULAR VALIDATION & REVIEW ================= */}
+        {step === "review" && processedResult && (
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+            {/* KPI Summary Cards */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 12 }}>
+              <div className="hf-ticket" style={{ padding: "8px 12px" }}>
+                <div className="hf-kpi-label">Total Rows Scanned</div>
+                <div className="mono" style={{ fontSize: 16, fontWeight: 700, marginTop: 2 }}>{processedResult.totalScanned}</div>
+              </div>
+              <div
+                className="hf-ticket"
+                style={{ padding: "8px 12px", borderLeft: "3px solid var(--green)", cursor: "pointer" }}
+                onClick={() => setActiveReviewTab("valid")}
+              >
+                <div className="hf-kpi-label" style={{ color: "var(--green)" }}>Ready to Import</div>
+                <div className="mono text-profit" style={{ fontSize: 16, fontWeight: 700, marginTop: 2 }}>
+                  ✓ {processedResult.validRows.length} valid
+                </div>
+              </div>
+              <div
+                className="hf-ticket"
+                style={{ padding: "8px 12px", borderLeft: processedResult.invalidRows.length > 0 ? "3px solid var(--red)" : "3px solid var(--line)", cursor: "pointer" }}
+                onClick={() => setActiveReviewTab("invalid")}
+              >
+                <div className="hf-kpi-label" style={{ color: processedResult.invalidRows.length > 0 ? "var(--red)" : "var(--ink-soft)" }}>
+                  Need Attention
+                </div>
+                <div className="mono" style={{ fontSize: 16, fontWeight: 700, marginTop: 2, color: processedResult.invalidRows.length > 0 ? "var(--red)" : "var(--green)" }}>
+                  {processedResult.invalidRows.length} row(s)
+                </div>
+              </div>
+              <div className="hf-ticket" style={{ padding: "8px 12px" }}>
+                <div className="hf-kpi-label">Stock Value to Add</div>
+                <div className="mono text-profit" style={{ fontSize: 16, fontWeight: 700, marginTop: 2 }}>
+                  {fmt(processedResult.totalEstimatedStockValue)}
+                </div>
+              </div>
+            </div>
+
+            {/* Tab Switcher & Export Issue Rows */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button
+                  type="button"
+                  onClick={() => setActiveReviewTab("valid")}
+                  className="hf-btn"
+                  style={{
+                    fontSize: 12,
+                    padding: "5px 12px",
+                    background: activeReviewTab === "valid" ? "var(--green)" : "var(--surface-hover)",
+                    color: activeReviewTab === "valid" ? "#fff" : "var(--ink)",
+                    borderRadius: 6,
+                    fontWeight: 700
+                  }}
+                >
+                  ✓ Ready to Import ({processedResult.validRows.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveReviewTab("invalid")}
+                  className="hf-btn"
+                  style={{
+                    fontSize: 12,
+                    padding: "5px 12px",
+                    background: activeReviewTab === "invalid" ? "var(--red)" : "var(--surface-hover)",
+                    color: activeReviewTab === "invalid" ? "#fff" : "var(--ink)",
+                    borderRadius: 6,
+                    fontWeight: 700
+                  }}
+                >
+                  ⚠ Needs Attention ({processedResult.invalidRows.length})
+                </button>
+              </div>
+
+              {processedResult.invalidRows.length > 0 && activeReviewTab === "invalid" && (
+                <button
+                  type="button"
+                  className="hf-btn hf-btn-ghost"
+                  style={{ fontSize: 11.5, padding: "4px 8px", color: "var(--red)", borderColor: "var(--red)" }}
+                  onClick={() => exportInvalidRowsCSV(processedResult.invalidRows)}
+                >
+                  <Download size={13} /> Export Problem Rows (.csv)
+                </button>
+              )}
+            </div>
+
+            {/* Table of Rows */}
+            <div style={{ flex: 1, minHeight: 0, overflowY: "auto", border: "1px solid var(--line)", borderRadius: 8, marginBottom: 12 }}>
+              {activeReviewTab === "valid" ? (
+                <table className="hf-table" style={{ fontSize: 12 }}>
+                  <thead style={{ position: "sticky", top: 0, background: "var(--surface)", zIndex: 10 }}>
+                    <tr>
+                      <th style={{ width: 40 }}>#</th>
+                      <th>Product Name</th>
+                      <th>Category</th>
+                      <th>Unit</th>
+                      <th>Cost (KSh)</th>
+                      <th>Retail (KSh)</th>
+                      <th>Contractor</th>
+                      <th>Opening Stock</th>
+                      <th style={{ textAlign: "right" }}>Stock Value</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {processedResult.validRows.map((r, idx) => (
+                      <tr key={idx}>
+                        <td className="mono" style={{ color: "var(--ink-soft)" }}>{r._rowNumber}</td>
+                        <td>
+                          <strong>{r.name}</strong>
+                          {r.brand && <span style={{ color: "var(--ink-soft)", fontSize: 11 }}> ({r.brand})</span>}
+                        </td>
+                        <td>{r.category}</td>
+                        <td className="mono">{r.baseUnit}</td>
+                        <td className="mono">{fmt(r.buyPrice)}</td>
+                        <td className="mono text-profit" style={{ fontWeight: 600 }}>{fmt(r.sellPrice)}</td>
+                        <td className="mono">{fmt(r.contractorPrice)}</td>
+                        <td className="mono" style={{ fontWeight: 700 }}>{r.stock}</td>
+                        <td className="mono text-profit" style={{ textAlign: "right", fontWeight: 700 }}>
+                          {fmt(r.stock * (r.buyPrice > 0 ? r.buyPrice : r.sellPrice))}
+                        </td>
+                      </tr>
+                    ))}
+                    {processedResult.validRows.length === 0 && (
+                      <tr>
+                        <td colSpan={9} style={{ textAlign: "center", padding: 24, color: "var(--ink-soft)" }}>
+                          No valid products found. Please adjust column mappings in Step 2.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              ) : (
+                <table className="hf-table" style={{ fontSize: 12 }}>
+                  <thead style={{ position: "sticky", top: 0, background: "var(--surface)", zIndex: 10 }}>
+                    <tr>
+                      <th style={{ width: 40 }}>#</th>
+                      <th>Product Name in File</th>
+                      <th>Sheet</th>
+                      <th>Price / Cost</th>
+                      <th>Stock</th>
+                      <th>Problem Identified</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {processedResult.invalidRows.map((r, idx) => (
+                      <tr key={idx} style={{ background: "rgba(220, 50, 50, 0.05)" }}>
+                        <td className="mono" style={{ color: "var(--red)", fontWeight: 700 }}>{r._rowNumber}</td>
+                        <td style={{ fontWeight: 600, color: r.name ? "var(--ink)" : "var(--red)" }}>
+                          {r.name || "MISSING NAME"}
+                        </td>
+                        <td>{r._sheetName}</td>
+                        <td className="mono">{fmt(r.sellPrice || r.buyPrice)}</td>
+                        <td className="mono">{r.stock}</td>
+                        <td>
+                          <div style={{ color: "var(--red)", fontWeight: 600 }}>
+                            ⚠ {(r.reasons || []).join("; ")}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {processedResult.invalidRows.length === 0 && (
+                      <tr>
+                        <td colSpan={6} style={{ textAlign: "center", padding: 24, color: "var(--green)" }}>
+                          ✓ Perfect! 100% of rows are clean and ready to import with no issues detected.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Bottom Actions Bar */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid var(--line)", paddingTop: 12, marginTop: "auto" }}>
+          <div>
+            {step === "mapping" && (
+              <button type="button" className="hf-btn hf-btn-ghost" onClick={() => setStep("upload")}>
+                ← Choose Different File
+              </button>
+            )}
+            {step === "review" && (
+              <button type="button" className="hf-btn hf-btn-ghost" onClick={() => setStep("mapping")}>
+                ← Back to Column Mapping
+              </button>
+            )}
+          </div>
+
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="hf-btn hf-btn-ghost" onClick={onCancel}>Cancel</button>
+            {step === "mapping" && (
+              <button type="button" className="hf-btn hf-btn-primary" onClick={handleProceedToReview}>
+                Validate & Preview Records →
+              </button>
+            )}
+            {step === "review" && (
+              <button
+                type="button"
+                className="hf-btn hf-btn-primary"
+                onClick={handleExecuteImport}
+                disabled={isImporting || !processedResult || processedResult.validRows.length === 0}
+              >
+                <Check size={16} /> Import {processedResult?.validRows.length || 0} Valid Products
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>
