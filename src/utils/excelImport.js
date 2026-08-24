@@ -1,23 +1,35 @@
 import * as XLSX from "xlsx";
 
 /**
- * HardwareFlow Canonical Field Specifications
+ * HardwareFlow Canonical Field Specifications with Explicit 3-Tier Classification
+ * Required: Must exist for a valid inventory record
+ * Optional but useful: Quantity, Buying Cost, Selling Price, Category, Supplier, Unit, etc.
+ * Ignorable: Total Cost, Invoice Number, Payment Status, Remarks, etc.
  */
 export const CANONICAL_FIELDS = [
-  { key: "name", label: "Product Name", required: true, desc: "Main product title or item description", example: "Cement 50kg, PVC Pipe 4-inch" },
-  { key: "sellPrice", label: "Retail / Selling Price", required: true, desc: "Price charged to regular retail customers (KSh)", example: "780, KSh 1,250" },
-  { key: "buyPrice", label: "Cost / Buying Price", required: false, desc: "Cost paid to supplier per unit/package (KSh)", example: "650, KSh 1,000" },
-  { key: "stock", label: "Opening Stock (Qty)", required: false, desc: "Current quantity on hand in shop or store", example: "50, 200, 1000" },
-  { key: "category", label: "Category / Department", required: false, desc: "Product department or group", example: "Cement, Plumbing, Electrical, Paint" },
-  { key: "baseUnit", label: "Unit of Measure (UOM)", required: false, desc: "How it is measured or sold to customers", example: "piece, bag, kg, metre, tin, roll" },
-  { key: "minStock", label: "Reorder Level (Min Alert)", required: false, desc: "Minimum stock threshold before alert triggers", example: "10, 20, 5" },
-  { key: "contractorPrice", label: "Contractor Price", required: false, desc: "Special discounted price for builders/contractors", example: "750, 1200" },
-  { key: "wholesalePrice", label: "Bulk / Wholesale Price", required: false, desc: "Discounted price for bulk wholesale orders", example: "730, 1150" },
-  { key: "sku", label: "Item Code / SKU / Barcode", required: false, desc: "Stock code or manufacturer barcode", example: "CEM-001, ELEC-010" },
-  { key: "brand", label: "Brand / Manufacturer", required: false, desc: "Product maker or brand name", example: "Bamburi, Crown, Kenpipe, SteelCo" },
-  { key: "location", label: "Storage Location", required: false, desc: "Storage bin, yard, shelf or shop aisle", example: "Main Store, Yard, Shelf B" },
-  { key: "description", label: "Description / Notes", required: false, desc: "Additional specifications or notes", example: "Portland cement for masonry" },
-  { key: "supplier", label: "Supplier Name", required: false, desc: "Name of the supplier who distributes this item", example: "Bamburi Ltd, Doone" },
+  // 1. Required
+  { key: "name", label: "Product Name *", group: "required", required: true, desc: "Main product title or item description", example: "Cement 50kg, PVC Pipe 4-inch" },
+
+  // 2. Optional but useful
+  { key: "stock", label: "Quantity / Opening Stock", group: "optional", required: false, desc: "Current quantity on hand (defaults to 0 if missing)", example: "50, 200, 1000" },
+  { key: "buyPrice", label: "Buying Cost / Cost Price", group: "optional", required: false, desc: "Cost paid to supplier per unit (KSh)", example: "650, KSh 1,000" },
+  { key: "sellPrice", label: "Selling Price / Retail Price", group: "optional", required: false, desc: "Price charged to retail customers (KSh)", example: "780, KSh 1,250" },
+  { key: "category", label: "Category / Department", group: "optional", required: false, desc: "Product group (uses sheet name or default)", example: "Cement, Plumbing, Electrical, Paint" },
+  { key: "supplier", label: "Supplier Name", group: "optional", required: false, desc: "Name of distributor / supplier", example: "Bamburi Ltd, Doone, SteelCo" },
+  { key: "baseUnit", label: "Unit of Measure (UOM)", group: "optional", required: false, desc: "Measurement unit (piece, bag, kg, metre, tin)", example: "piece, bag, kg, metre, tin, roll" },
+  { key: "minStock", label: "Reorder Level (Min Alert)", group: "optional", required: false, desc: "Minimum stock threshold for alerts", example: "10, 20, 5" },
+  { key: "contractorPrice", label: "Contractor Price", group: "optional", required: false, desc: "Special discounted price for builders", example: "750, 1200" },
+  { key: "wholesalePrice", label: "Bulk / Wholesale Price", group: "optional", required: false, desc: "Discounted price for bulk wholesale orders", example: "730, 1150" },
+  { key: "sku", label: "Item Code / SKU / Barcode", group: "optional", required: false, desc: "Stock code or barcode", example: "CEM-001, ELEC-010" },
+  { key: "brand", label: "Brand / Manufacturer", group: "optional", required: false, desc: "Product maker or brand name", example: "Bamburi, Crown, Kenpipe, SteelCo" },
+  { key: "location", label: "Storage Location", group: "optional", required: false, desc: "Storage bin, yard, shelf or shop aisle", example: "Main Store, Yard, Shelf B" },
+  { key: "description", label: "Description / Notes", group: "optional", required: false, desc: "Additional specifications or notes", example: "Portland cement for masonry" },
+
+  // 3. Ignorable
+  { key: "totalCost", label: "Total Cost / Amount (Ignore)", group: "ignorable", required: false, desc: "Aggregated line total cost (will be skipped)", example: "50,000, 12,500" },
+  { key: "invoiceNo", label: "Invoice Number (Ignore)", group: "ignorable", required: false, desc: "Invoice / PO document reference (will be skipped)", example: "INV-001, PO-99" },
+  { key: "paymentStatus", label: "Payment Status (Ignore)", group: "ignorable", required: false, desc: "Paid / Unpaid / Pending status (will be skipped)", example: "Paid, Unpaid, Pending" },
+  { key: "remarks", label: "Remarks / Comments (Ignore)", group: "ignorable", required: false, desc: "External remarks or memos (will be skipped)", example: "Delivered on Friday" },
 ];
 
 /**
@@ -169,7 +181,7 @@ const SYNONYMS_DICTIONARY = {
     /(product|item|particulars|material|goods|article|stock\s*item)/i
   ],
   buyPrice: [
-    /^(cost(\s*price)?|buying(\s*price)?|buy(\s*price)?|purchase(\s*price)?|purchase(\s*cost)?|buying(\s*rate)?|buy(\s*rate)?|unit\s*cost|b\.?p\.?|cost\s*rate|purchase\s*rate|c\.?p\.?|in\s*price|supplier\s*price|dealer\s*price|cost)$/i,
+    /^(cost(\s*price)?|buying(\s*price)?|buy(\s*price)?|purchase(\s*price)?|purchase(\s*cost)?|buying(\s*rate)?|buy(\s*rate)?|unit\s*cost|b\.?p\.?|cost\s*rate|purchase\s*rate|c\.?p\.?|in\s*price|supplier\s*price|dealer\s*price|unit\s*buying\s*price|cost)$/i,
     /(buying|purchase|buy\s*price|cost\s*price|unit\s*cost)/i
   ],
   sellPrice: [
@@ -213,12 +225,29 @@ const SYNONYMS_DICTIONARY = {
     /(location|shelf|yard|aisle|bin|storage)/i
   ],
   description: [
-    /^(description|details|specs|specification|notes|remarks|comment|info)$/i,
-    /(description|details|specs|notes|remarks)/i
+    /^(description|details|specs|specification|notes|info)$/i,
+    /(description|details|specs)/i
   ],
   supplier: [
     /^(supplier|vendor|source|supplier\s*name|distributor)$/i,
     /(supplier|vendor|distributor)/i
+  ],
+  // Explicit Ignorable fields patterns to prevent false matches with unit prices
+  totalCost: [
+    /^(total(\s*cost|\s*amount|\s*price|\s*val)?|grand\s*total|subtotal|line\s*total|gross\s*amount|total\s*kes|total\s*ksh)$/i,
+    /(total\s*cost|grand\s*total|line\s*total|total\s*amount)/i
+  ],
+  invoiceNo: [
+    /^(invoice(\s*no|\s*num|\s*number)?|inv(\s*no|\s*#)?|bill\s*no|receipt(\s*no)?|ref(\s*no)?|po\s*number|order\s*no|doc\s*no)$/i,
+    /(invoice|receipt\s*no|bill\s*no|po\s*number)/i
+  ],
+  paymentStatus: [
+    /^(payment(\s*status)?|pay(\s*status)?|status|paid|unpaid|payment\s*mode|payment\s*terms|terms\s*of\s*payment)$/i,
+    /(payment\s*status|paid\s*status|unpaid)/i
+  ],
+  remarks: [
+    /^(remarks?|comments?|memo|external\s*notes?)$/i,
+    /(remarks|comments|memo)/i
   ],
 };
 
@@ -362,16 +391,31 @@ export function analyzeColumnsAndSuggestMapping(headers = [], sampleRows = []) {
     let bestMatch = null;
     let confidence = 0;
 
-    for (const [fieldKey, patterns] of Object.entries(SYNONYMS_DICTIONARY)) {
-      const [exactRegex, broadRegex] = patterns;
+    // Check ignorable fields first to prevent Total Cost from capturing buyPrice
+    if (SYNONYMS_DICTIONARY.totalCost[0].test(rawHeader) || SYNONYMS_DICTIONARY.totalCost[0].test(clean)) {
+      bestMatch = "totalCost";
+      confidence = 98;
+    } else if (SYNONYMS_DICTIONARY.invoiceNo[0].test(rawHeader) || SYNONYMS_DICTIONARY.invoiceNo[0].test(clean)) {
+      bestMatch = "invoiceNo";
+      confidence = 98;
+    } else if (SYNONYMS_DICTIONARY.paymentStatus[0].test(rawHeader) || SYNONYMS_DICTIONARY.paymentStatus[0].test(clean)) {
+      bestMatch = "paymentStatus";
+      confidence = 98;
+    } else if (SYNONYMS_DICTIONARY.remarks[0].test(rawHeader) || SYNONYMS_DICTIONARY.remarks[0].test(clean)) {
+      bestMatch = "remarks";
+      confidence = 98;
+    } else {
+      for (const [fieldKey, patterns] of Object.entries(SYNONYMS_DICTIONARY)) {
+        const [exactRegex, broadRegex] = patterns;
 
-      if (exactRegex.test(rawHeader) || exactRegex.test(clean)) {
-        bestMatch = fieldKey;
-        confidence = 98;
-        break;
-      } else if (broadRegex.test(rawHeader) && confidence < 75) {
-        bestMatch = fieldKey;
-        confidence = 75;
+        if (exactRegex.test(rawHeader) || exactRegex.test(clean)) {
+          bestMatch = fieldKey;
+          confidence = 98;
+          break;
+        } else if (broadRegex.test(rawHeader) && confidence < 75) {
+          bestMatch = fieldKey;
+          confidence = 75;
+        }
       }
     }
 
@@ -382,23 +426,25 @@ export function analyzeColumnsAndSuggestMapping(headers = [], sampleRows = []) {
     if (isDateHeader || isDateValue) {
       bestMatch = null;
       confidence = 0;
-    } else {
+    } else if (!bestMatch) {
       // Inspect data context
       if (sampleValues.length > 0) {
         const allNumbers = sampleValues.every(v => /^[\d,.\s/KShKES$=-]+$/.test(v) && /\d/.test(v));
         const hasCurrency = sampleValues.some(v => /(ksh|kes|\/=|\$)/i.test(v));
         const looksLikeUnit = sampleValues.some(v => /^(pcs|piece|pieces|bag|bags|kg|kgs|metre|metres|m|tin|tins|roll|rolls|box|carton|ctn|pair|set)$/i.test(v));
 
-        if (looksLikeUnit && (!bestMatch || confidence < 90)) {
+        if (looksLikeUnit) {
           bestMatch = "baseUnit";
           confidence = 92;
-        } else if (hasCurrency && (!bestMatch || bestMatch === "name")) {
+        } else if (hasCurrency) {
           bestMatch = "sellPrice";
           confidence = 88;
-        } else if (!bestMatch && allNumbers) {
-          // Numeric column without obvious header
-          if (/price|rate|amt|amount/i.test(rawHeader)) {
+        } else if (allNumbers) {
+          if (/price|rate|retail/i.test(rawHeader)) {
             bestMatch = "sellPrice";
+            confidence = 80;
+          } else if (/cost|buy/i.test(rawHeader)) {
+            bestMatch = "buyPrice";
             confidence = 80;
           } else if (/qty|count|bal|stock/i.test(rawHeader)) {
             bestMatch = "stock";
@@ -423,15 +469,14 @@ export function analyzeColumnsAndSuggestMapping(headers = [], sampleRows = []) {
   if (priceCols.length > 1) {
     priceCols.forEach(col => {
       const h = col.originalHeader.toLowerCase();
-      if (/cost|buy|purchase|bp|c\.p/i.test(h)) {
+      if (/cost|buy|purchase|bp|c\.p/i.test(h) && !/total/i.test(h)) {
         col.suggestedField = "buyPrice";
         col.confidence = 97;
       } else if (/sell|retail|sale|sp|s\.p|mrp/i.test(h)) {
         col.suggestedField = "sellPrice";
         col.confidence = 99;
       } else if (/rate|price/i.test(h)) {
-        // If another col is cost, this rate is sellPrice
-        const hasCost = priceCols.some(p => /cost|buy|purchase/i.test(p.originalHeader));
+        const hasCost = priceCols.some(p => /cost|buy|purchase/i.test(p.originalHeader) && !/total/i.test(p.originalHeader));
         if (hasCost) {
           col.suggestedField = "sellPrice";
           col.confidence = 95;
@@ -440,14 +485,12 @@ export function analyzeColumnsAndSuggestMapping(headers = [], sampleRows = []) {
     });
   }
 
-  // 2. Prevent duplicate assignments for single-instance fields (stock, sku, category, minStock)
+  // 2. Prevent duplicate assignments for single-instance fields
   const singleFields = ["stock", "sku", "category", "minStock", "name", "baseUnit"];
   singleFields.forEach(fieldKey => {
     const matchingCols = suggestions.filter(s => s.suggestedField === fieldKey);
     if (matchingCols.length > 1) {
-      // Sort by confidence descending
       matchingCols.sort((a, b) => b.confidence - a.confidence);
-      // Keep first, reset the rest to null / skip
       for (let i = 1; i < matchingCols.length; i++) {
         matchingCols[i].suggestedField = null;
         matchingCols[i].confidence = 0;
@@ -526,6 +569,7 @@ export function normalizeText(val, fallback = "") {
 
 /**
  * Process Raw Sheets with User-Approved Mapping and Global Defaults
+ * Strict on Required Fields (Product Name), Lenient on Optional Fields with Contextual Warnings.
  */
 export function processDataWithMapping(sheetsData = [], columnMapping = {}, globalDefaults = {}) {
   const defaultCategory = normalizeText(globalDefaults.defaultCategory, "General");
@@ -537,6 +581,9 @@ export function processDataWithMapping(sheetsData = [], columnMapping = {}, glob
   const validRows = [];
   const invalidRows = [];
   let totalScanned = 0;
+
+  // Ignorable keys that should not populate product payload
+  const ignorableKeys = new Set(["totalCost", "invoiceNo", "paymentStatus", "remarks", "skip"]);
 
   sheetsData.forEach(sheet => {
     const sheetDataRows = sheet.dataRows || [];
@@ -551,7 +598,7 @@ export function processDataWithMapping(sheetsData = [], columnMapping = {}, glob
 
       // Extract values according to columnMapping: { [colIndex]: canonicalFieldKey }
       Object.entries(columnMapping).forEach(([colIdxStr, fieldKey]) => {
-        if (!fieldKey || fieldKey === "skip") return;
+        if (!fieldKey || ignorableKeys.has(fieldKey)) return;
         const colIdx = parseInt(colIdxStr, 10);
         extracted[fieldKey] = row[colIdx];
       });
@@ -562,6 +609,10 @@ export function processDataWithMapping(sheetsData = [], columnMapping = {}, glob
       const sellPriceRaw = extracted.sellPrice;
       const buyPrice = normalizePrice(buyPriceRaw, 0);
       let sellPrice = normalizePrice(sellPriceRaw, 0);
+
+      const hasRawBuy = buyPriceRaw !== undefined && buyPriceRaw !== null && String(buyPriceRaw).trim() !== "";
+      const hasRawSell = sellPriceRaw !== undefined && sellPriceRaw !== null && String(sellPriceRaw).trim() !== "";
+      const hasRawStock = extracted.stock !== undefined && extracted.stock !== null && String(extracted.stock).trim() !== "";
 
       // Auto-compute sellPrice if only buyPrice was provided
       if (sellPrice <= 0 && buyPrice > 0) {
@@ -580,13 +631,24 @@ export function processDataWithMapping(sheetsData = [], columnMapping = {}, glob
       const wholesalePrice = normalizePrice(extracted.wholesalePrice, sellPrice > 0 ? sellPrice : buyPrice);
       const supplierName = normalizeText(extracted.supplier, "");
 
-      // Validation Checks
+      // Validation & Warning Checks
       const errors = [];
+      const warnings = [];
+
+      // 1. Strict Requirement Check: Only reject if Product Name is missing
       if (!name) {
-        errors.push("Missing product name or description");
+        errors.push("❌ Product name missing");
       }
-      if (sellPrice <= 0 && buyPrice <= 0) {
-        errors.push("Missing both selling price and buying cost");
+
+      // 2. Lenient Context-Aware Warnings for Optional Fields
+      if (!hasRawStock || stock === 0) {
+        warnings.push("⚠ Quantity missing — defaulting to 0");
+      }
+      if (!hasRawBuy || buyPrice === 0) {
+        warnings.push("⚠ Buying cost missing — leaving blank (KSh 0)");
+      }
+      if (!hasRawSell || sellPrice === 0) {
+        warnings.push("⚠ Selling price missing — leaving blank (KSh 0)");
       }
 
       const rowData = {
@@ -609,6 +671,7 @@ export function processDataWithMapping(sheetsData = [], columnMapping = {}, glob
         location,
         supplierId: defaultSupplierId,
         supplierName,
+        warnings,
         rawRow: row,
       };
 
@@ -666,4 +729,3 @@ export function exportInvalidRowsCSV(invalidRows = []) {
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
 }
-

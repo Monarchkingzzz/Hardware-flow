@@ -301,11 +301,16 @@ export function validateSupplierPayment(db, supplierId, amount) {
     return { valid: false, reason: "Supplier record not found." };
   }
 
-  // Calculate total goods received from supplier
-  let totalPurchased = 0;
+  // Calculate total goods received from supplier from db.purchases and product history
+  let totalPurchased = (db?.purchases || [])
+    .filter(p => p.supplierId === supplierId)
+    .reduce((a, p) => a + (Number(p.total) || 0), 0);
+
+  // If there are legacy product movement records not tracked in purchases, include them
+  const trackedPoNumbers = new Set((db?.purchases || []).map(p => p.poNumber || p.id).filter(Boolean));
   (db?.products || []).filter(p => p.supplierId === supplierId).forEach(p => {
     (p.history || []).forEach(h => {
-      if (h.action === "Received" || h.action === "Receive Stock") {
+      if ((h.action === "Received" || h.action === "Receive Stock") && (!h.ref || !trackedPoNumbers.has(h.ref))) {
         const factor = Number(p.conversionFactor) > 0 ? Number(p.conversionFactor) : 1;
         const unitCost = Number(p.buyPrice) > 0 ? (Number(p.buyPrice) / factor) : 0;
         totalPurchased += (Number(h.qty) || 0) * unitCost;

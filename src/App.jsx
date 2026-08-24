@@ -97,6 +97,138 @@ function fmt(n) {
   return "KSh " + v.toLocaleString("en-US");
 }
 
+/**
+ * Format unit name dynamically: singular if 1 or -1, plural otherwise.
+ * Properly handles hardware terms (piece -> pieces, box -> boxes, metre -> metres, etc.)
+ */
+function formatUnit(qty, unit = "piece") {
+  if (!unit) return "";
+  const clean = String(unit).trim();
+  if (!clean) return "";
+
+  const abs = Math.abs(Number(qty));
+  const isSingular = abs === 1;
+
+  // Preserve units containing numbers, specs or parentheticals (e.g. "50kg", "carton (12)", "100m")
+  if (/\d|\(|\)/.test(clean)) {
+    return clean;
+  }
+
+  const lower = clean.toLowerCase();
+
+  const singularToPlural = {
+    "piece": "pieces",
+    "pc": "pcs",
+    "pcs": "pcs",
+    "bag": "bags",
+    "roll": "rolls",
+    "box": "boxes",
+    "tin": "tins",
+    "packet": "packets",
+    "pkt": "pkts",
+    "set": "sets",
+    "pair": "pairs",
+    "carton": "cartons",
+    "ctn": "ctns",
+    "metre": "metres",
+    "meter": "meters",
+    "mtr": "mtrs",
+    "m": "m",
+    "kg": "kgs",
+    "kilogram": "kilograms",
+    "litre": "litres",
+    "liter": "liters",
+    "ltr": "ltrs",
+    "l": "l",
+    "gallon": "gallons",
+    "bucket": "buckets",
+    "bundle": "bundles",
+    "sheet": "sheets",
+    "length": "lengths",
+    "bar": "bars",
+    "drum": "drums",
+    "can": "cans",
+    "bottle": "bottles",
+    "unit": "units",
+    "item": "items",
+    "foot": "feet",
+    "ft": "ft",
+    "inch": "inches",
+  };
+
+  const pluralToSingular = {
+    "pieces": "piece",
+    "pcs": "pc",
+    "bags": "bag",
+    "rolls": "roll",
+    "boxes": "box",
+    "tins": "tin",
+    "packets": "packet",
+    "pkts": "pkt",
+    "sets": "set",
+    "pairs": "pair",
+    "cartons": "carton",
+    "ctns": "ctn",
+    "metres": "metre",
+    "meters": "meter",
+    "mtrs": "mtr",
+    "kgs": "kg",
+    "kilograms": "kilogram",
+    "litres": "litre",
+    "liters": "liter",
+    "ltrs": "ltr",
+    "gallons": "gallon",
+    "buckets": "bucket",
+    "bundles": "bundle",
+    "sheets": "sheet",
+    "lengths": "length",
+    "bars": "bar",
+    "drums": "drum",
+    "cans": "can",
+    "bottles": "bottle",
+    "units": "unit",
+    "items": "item",
+    "feet": "foot",
+    "inches": "inch",
+  };
+
+  if (isSingular) {
+    if (pluralToSingular[lower]) {
+      return pluralToSingular[lower];
+    }
+    if (lower.endsWith("boxes")) return "box";
+    if (lower.endsWith("inches")) return "inch";
+    if (lower.endsWith("ies")) return clean.slice(0, -3) + "y";
+    if (lower.endsWith("s") && !lower.endsWith("ss")) return clean.slice(0, -1);
+    return clean;
+  } else {
+    if (singularToPlural[lower]) {
+      return singularToPlural[lower];
+    }
+    if (pluralToSingular[lower]) {
+      return clean;
+    }
+    if (lower.endsWith("x") || lower.endsWith("ch") || lower.endsWith("sh") || lower.endsWith("ss")) {
+      return clean + "es";
+    }
+    if (lower.endsWith("y") && !/[aeiou]y$/i.test(lower)) {
+      return clean.slice(0, -1) + "ies";
+    }
+    if (!lower.endsWith("s")) {
+      return clean + "s";
+    }
+    return clean;
+  }
+}
+
+/**
+ * Format quantity and unit string together with singular/plural accuracy.
+ */
+function fmtQty(qty, unit = "piece") {
+  const num = Number(qty) || 0;
+  return `${num} ${formatUnit(num, unit)}`;
+}
+
 function todayISO(offsetDays = 0) {
   const d = new Date();
   d.setDate(d.getDate() + offsetDays);
@@ -496,20 +628,47 @@ function useDB() {
             setDb(prevLocal => {
               if (!prevLocal) return cloudDb;
 
-              // Non-destructive merge: preserve only unsynced offline items without resurrecting deleted items
+              // Non-destructive merge: preserve local records in transit so they aren't erased by cloud pull
+              const cloudCustIds = new Set((cloudDb.customers || []).map(c => c.id));
+              const pendingLocalCustomers = (prevLocal.customers || []).filter(c => !cloudCustIds.has(c.id));
+              const mergedCustomers = [...pendingLocalCustomers, ...(cloudDb.customers || [])];
+
+              const cloudSuppIds = new Set((cloudDb.suppliers || []).map(s => s.id));
+              const pendingLocalSuppliers = (prevLocal.suppliers || []).filter(s => !cloudSuppIds.has(s.id));
+              const mergedSuppliers = [...pendingLocalSuppliers, ...(cloudDb.suppliers || [])];
+
+              const cloudProdIds = new Set((cloudDb.products || []).map(p => p.id));
+              const pendingLocalProducts = (prevLocal.products || []).filter(p => !cloudProdIds.has(p.id));
+              const mergedProducts = [...pendingLocalProducts, ...(cloudDb.products || [])];
+
+              const cloudPurchaseIds = new Set((cloudDb.purchases || []).map(p => p.id || p.poNumber));
+              const pendingLocalPurchases = (prevLocal.purchases || []).filter(p => !cloudPurchaseIds.has(p.id) && !cloudPurchaseIds.has(p.poNumber));
+              const mergedPurchases = [...pendingLocalPurchases, ...(cloudDb.purchases || [])];
+
+              const cloudQuoteIds = new Set((cloudDb.quotations || []).map(q => q.number || q.id));
+              const pendingLocalQuotations = (prevLocal.quotations || []).filter(q => !cloudQuoteIds.has(q.number) && !cloudQuoteIds.has(q.id));
+              const mergedQuotations = [...pendingLocalQuotations, ...(cloudDb.quotations || [])];
+
               const cloudSaleInvoices = new Set((cloudDb.sales || []).map(s => s.invoiceNo || s.id));
-              const pendingLocalSales = (prevLocal.sales || []).filter(s => s.offline === true && !cloudSaleInvoices.has(s.invoiceNo) && !cloudSaleInvoices.has(s.id));
+              const pendingLocalSales = (prevLocal.sales || []).filter(s => (s.offline === true || !cloudSaleInvoices.has(s.invoiceNo)) && !cloudSaleInvoices.has(s.id));
 
               const cloudExpIds = new Set((cloudDb.expenses || []).map(e => e.id));
-              const pendingLocalExpenses = (prevLocal.expenses || []).filter(e => e.offline === true && !cloudExpIds.has(e.id));
+              const pendingLocalExpenses = (prevLocal.expenses || []).filter(e => (e.offline === true || !cloudExpIds.has(e.id)));
 
               const merged = {
                 ...cloudDb,
+                customers: mergedCustomers,
+                suppliers: mergedSuppliers,
+                products: mergedProducts,
+                purchases: mergedPurchases,
+                quotations: mergedQuotations,
                 sales: [...pendingLocalSales, ...(cloudDb.sales || [])],
                 expenses: [...pendingLocalExpenses, ...(cloudDb.expenses || [])],
-                auditLog: cloudDb.auditLog || [],
+                auditLog: cloudDb.auditLog || prevLocal.auditLog || [],
                 invoiceSeq: Math.max(cloudDb.invoiceSeq || 0, prevLocal.invoiceSeq || 0),
                 quoteSeq: Math.max(cloudDb.quoteSeq || 0, prevLocal.quoteSeq || 0),
+                poSeq: Math.max(cloudDb.poSeq || 0, prevLocal.poSeq || 0),
+                adjSeq: Math.max(cloudDb.adjSeq || 0, prevLocal.adjSeq || 0),
               };
 
               try {
@@ -678,6 +837,17 @@ const GlobalStyle = ({ theme }) => {
         display: flex;
         flex-direction: column;
         padding: 20px 0;
+        position: sticky;
+        top: 0;
+        height: 100vh;
+        height: 100dvh;
+        overflow-y: auto;
+        z-index: 100;
+      }
+      .hf-desktop-topbar {
+        position: sticky;
+        top: 0;
+        z-index: 90;
       }
       .hf-main-wrap {
         flex: 1;
@@ -1811,17 +1981,7 @@ function daysSinceLastActivity(db, customerId) {
 }
 
 function supplierOutstanding(db, supplierId) {
-  let total = 0;
-  (db?.products || []).filter(p => p.supplierId === supplierId).forEach(p => {
-    (p.history || []).forEach(h => {
-      if (h.action === "Received" || h.action === "Receive Stock") {
-        const factor = Number(p.conversionFactor) > 0 ? Number(p.conversionFactor) : 1;
-        const unitCost = Number(p.buyPrice) > 0 ? (Number(p.buyPrice) / factor) : 0;
-        total += (Number(h.qty) || 0) * unitCost;
-      }
-    });
-  });
-
+  const total = supplierTotalPurchases(db, supplierId);
   const supplier = (db?.suppliers || []).find(s => s.id === supplierId);
   const paidFromSupplier = (supplier?.payments || []).reduce((a, x) => a + (Number(x.amount) || 0), 0);
 
@@ -1836,16 +1996,22 @@ function supplierOutstanding(db, supplierId) {
 }
 
 function supplierTotalPurchases(db, supplierId) {
-  let total = 0;
+  let total = (db?.purchases || [])
+    .filter(p => p.supplierId === supplierId)
+    .reduce((a, p) => a + (Number(p.total) || 0), 0);
+
+  // Also include any legacy product history stock additions linked to this supplier not tracked in purchases
+  const trackedPoNumbers = new Set((db?.purchases || []).map(p => p.poNumber || p.id).filter(Boolean));
   (db?.products || []).filter(p => p.supplierId === supplierId).forEach(p => {
     (p.history || []).forEach(h => {
-      if (h.action === "Received" || h.action === "Receive Stock") {
+      if ((h.action === "Received" || h.action === "Receive Stock") && (!h.ref || !trackedPoNumbers.has(h.ref))) {
         const factor = Number(p.conversionFactor) > 0 ? Number(p.conversionFactor) : 1;
         const unitCost = Number(p.buyPrice) > 0 ? (Number(p.buyPrice) / factor) : 0;
         total += (Number(h.qty) || 0) * unitCost;
       }
     });
   });
+
   return Math.round(total);
 }
 
@@ -1903,7 +2069,7 @@ function POS({ db, setDb, role, notify, currentUser }) {
 
   function addToCart(p) {
     if ((p.stock || 0) <= 0) {
-      notify("error", "Product Out of Stock", `Cannot add "${p.name}". Current available inventory is 0 ${p.baseUnit}.`);
+      notify("error", "Product Out of Stock", `Cannot add "${p.name}". Current available inventory is ${fmtQty(0, p.baseUnit)}.`);
       return;
     }
     setCart(c => {
@@ -1911,7 +2077,7 @@ function POS({ db, setDb, role, notify, currentUser }) {
       if (existing) {
         const currentQty = Number(existing.qty) || 0;
         if (currentQty >= (p.stock || 0)) {
-          notify("warning", "Stock Limit Reached", `Cannot add more. Only ${p.stock} ${p.baseUnit} of "${p.name}" available in stock.`);
+          notify("warning", "Stock Limit Reached", `Cannot add more. Only ${fmtQty(p.stock, p.baseUnit)} of "${p.name}" available in stock.`);
           return c;
         }
         const newQty = currentQty + 1;
@@ -1943,7 +2109,7 @@ function POS({ db, setDb, role, notify, currentUser }) {
         num = 1;
       }
       if (p && num > (p.stock || 0)) {
-        notify("warning", "Quantity Exceeds Stock", `Adjusted quantity of "${p.name}" to max available stock (${p.stock} ${p.baseUnit}).`);
+        notify("warning", "Quantity Exceeds Stock", `Adjusted quantity of "${p.name}" to max available stock (${fmtQty(p.stock, p.baseUnit)}).`);
         num = Math.max(1, p.stock || 0);
       }
       return { ...i, qty: num, qtyInput: String(num) };
@@ -3350,6 +3516,8 @@ function ExcelImportModal({ db, setDb, onCancel, notify, currentUser, role }) {
   const [processedResult, setProcessedResult] = useState(null);
   const [activeReviewTab, setActiveReviewTab] = useState("valid"); // "valid" | "invalid"
   const [reviewSearch, setReviewSearch] = useState("");
+  const [reviewPage, setReviewPage] = useState(1);
+  const reviewPageSize = 50;
   const [isImporting, setIsImporting] = useState(false);
 
   const fileInputRef = useRef(null);
@@ -3429,6 +3597,7 @@ function ExcelImportModal({ db, setDb, onCancel, notify, currentUser, role }) {
     const processed = processDataWithMapping(filteredSheetsData, columnMapping, globalDefaults);
 
     setProcessedResult(processed);
+    setReviewPage(1);
     setStep("review");
     setActiveReviewTab(processed.validRows.length > 0 ? "valid" : "invalid");
   }
@@ -3728,25 +3897,29 @@ function ExcelImportModal({ db, setDb, onCancel, notify, currentUser, role }) {
                             }}
                           >
                             <option value="skip">[ Don't Import / Skip Column ]</option>
-                            <optgroup label="Essential Product Info">
+                            <optgroup label="1. Required (Must exist for valid record)">
                               <option value="name">Product Name / Item Description *</option>
-                              <option value="sellPrice">Retail / Selling Price (KSh) *</option>
-                              <option value="buyPrice">Cost / Buying Price (KSh)</option>
-                              <option value="stock">Opening Stock Quantity</option>
                             </optgroup>
-                            <optgroup label="Catalog & Classification">
+                            <optgroup label="2. Optional but Useful (Defaults applied if missing)">
+                              <option value="stock">Quantity / Opening Stock (defaults to 0)</option>
+                              <option value="buyPrice">Buying Cost / Cost Price (optional)</option>
+                              <option value="sellPrice">Selling Price / Retail Price (optional)</option>
                               <option value="category">Category / Department</option>
-                              <option value="baseUnit">Unit of Measure (UOM)</option>
+                              <option value="supplier">Supplier Name</option>
+                              <option value="baseUnit">Unit of Measure (piece, bag, kg, etc.)</option>
                               <option value="minStock">Reorder Level / Min Alert</option>
+                              <option value="contractorPrice">Contractor Discount Price</option>
+                              <option value="wholesalePrice">Bulk / Wholesale Price</option>
                               <option value="brand">Brand / Manufacturer</option>
                               <option value="sku">Item Code / SKU / Barcode</option>
                               <option value="location">Storage Location</option>
                               <option value="description">Description / Notes</option>
                             </optgroup>
-                            <optgroup label="Price Tiers & Supplier">
-                              <option value="contractorPrice">Contractor Discount Price</option>
-                              <option value="wholesalePrice">Wholesale / Bulk Price</option>
-                              <option value="supplier">Supplier Name</option>
+                            <optgroup label="3. Ignorable / Metadata (Will be skipped)">
+                              <option value="totalCost">Total Cost / Total Amount (Skip)</option>
+                              <option value="invoiceNo">Invoice Number / Ref (Skip)</option>
+                              <option value="paymentStatus">Payment Status (Skip)</option>
+                              <option value="remarks">Remarks / Comments (Skip)</option>
                             </optgroup>
                           </select>
                         </td>
@@ -3831,178 +4004,221 @@ function ExcelImportModal({ db, setDb, onCancel, notify, currentUser, role }) {
         )}
 
         {/* ================= STEP 3: GRANULAR VALIDATION & REVIEW ================= */}
-        {step === "review" && processedResult && (
-          <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
-            {/* KPI Summary Cards */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 12 }}>
-              <div className="hf-ticket" style={{ padding: "8px 12px" }}>
-                <div className="hf-kpi-label">Total Rows Scanned</div>
-                <div className="mono" style={{ fontSize: 16, fontWeight: 700, marginTop: 2 }}>{processedResult.totalScanned}</div>
-              </div>
-              <div
-                className="hf-ticket"
-                style={{ padding: "8px 12px", borderLeft: "3px solid var(--green)", cursor: "pointer" }}
-                onClick={() => setActiveReviewTab("valid")}
-              >
-                <div className="hf-kpi-label" style={{ color: "var(--green)" }}>Ready to Import</div>
-                <div className="mono text-profit" style={{ fontSize: 16, fontWeight: 700, marginTop: 2 }}>
-                  ✓ {processedResult.validRows.length} valid
-                </div>
-              </div>
-              <div
-                className="hf-ticket"
-                style={{ padding: "8px 12px", borderLeft: processedResult.invalidRows.length > 0 ? "3px solid var(--red)" : "3px solid var(--line)", cursor: "pointer" }}
-                onClick={() => setActiveReviewTab("invalid")}
-              >
-                <div className="hf-kpi-label" style={{ color: processedResult.invalidRows.length > 0 ? "var(--red)" : "var(--ink-soft)" }}>
-                  Need Attention
-                </div>
-                <div className="mono" style={{ fontSize: 16, fontWeight: 700, marginTop: 2, color: processedResult.invalidRows.length > 0 ? "var(--red)" : "var(--green)" }}>
-                  {processedResult.invalidRows.length} row(s)
-                </div>
-              </div>
-              <div className="hf-ticket" style={{ padding: "8px 12px" }}>
-                <div className="hf-kpi-label">Stock Value to Add</div>
-                <div className="mono text-profit" style={{ fontSize: 16, fontWeight: 700, marginTop: 2 }}>
-                  {fmt(processedResult.totalEstimatedStockValue)}
-                </div>
-              </div>
-            </div>
+        {step === "review" && processedResult && (() => {
+          const currentReviewRows = activeReviewTab === "valid" ? (processedResult?.validRows || []) : (processedResult?.invalidRows || []);
+          const reviewTotalPages = Math.ceil(currentReviewRows.length / reviewPageSize) || 1;
+          const paginatedReviewRows = currentReviewRows.slice((reviewPage - 1) * reviewPageSize, reviewPage * reviewPageSize);
 
-            {/* Tab Switcher & Export Issue Rows */}
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
-              <div style={{ display: "flex", gap: 6 }}>
-                <button
-                  type="button"
-                  onClick={() => setActiveReviewTab("valid")}
-                  className="hf-btn"
-                  style={{
-                    fontSize: 12,
-                    padding: "5px 12px",
-                    background: activeReviewTab === "valid" ? "var(--green)" : "var(--surface-hover)",
-                    color: activeReviewTab === "valid" ? "#fff" : "var(--ink)",
-                    borderRadius: 6,
-                    fontWeight: 700
-                  }}
+          return (
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+              {/* KPI Summary Cards */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 12 }}>
+                <div className="hf-ticket" style={{ padding: "8px 12px" }}>
+                  <div className="hf-kpi-label">Total Rows Scanned</div>
+                  <div className="mono" style={{ fontSize: 16, fontWeight: 700, marginTop: 2 }}>{processedResult.totalScanned}</div>
+                </div>
+                <div
+                  className="hf-ticket"
+                  style={{ padding: "8px 12px", borderLeft: "3px solid var(--green)", cursor: "pointer" }}
+                  onClick={() => { setActiveReviewTab("valid"); setReviewPage(1); }}
                 >
-                  ✓ Ready to Import ({processedResult.validRows.length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveReviewTab("invalid")}
-                  className="hf-btn"
-                  style={{
-                    fontSize: 12,
-                    padding: "5px 12px",
-                    background: activeReviewTab === "invalid" ? "var(--red)" : "var(--surface-hover)",
-                    color: activeReviewTab === "invalid" ? "#fff" : "var(--ink)",
-                    borderRadius: 6,
-                    fontWeight: 700
-                  }}
+                  <div className="hf-kpi-label" style={{ color: "var(--green)" }}>Ready to Import</div>
+                  <div className="mono text-profit" style={{ fontSize: 16, fontWeight: 700, marginTop: 2 }}>
+                    ✓ {processedResult.validRows.length} valid
+                  </div>
+                </div>
+                <div
+                  className="hf-ticket"
+                  style={{ padding: "8px 12px", borderLeft: processedResult.invalidRows.length > 0 ? "3px solid var(--red)" : "3px solid var(--line)", cursor: "pointer" }}
+                  onClick={() => { setActiveReviewTab("invalid"); setReviewPage(1); }}
                 >
-                  ⚠ Needs Attention ({processedResult.invalidRows.length})
-                </button>
+                  <div className="hf-kpi-label" style={{ color: processedResult.invalidRows.length > 0 ? "var(--red)" : "var(--ink-soft)" }}>
+                    Need Attention
+                  </div>
+                  <div className="mono" style={{ fontSize: 16, fontWeight: 700, marginTop: 2, color: processedResult.invalidRows.length > 0 ? "var(--red)" : "var(--green)" }}>
+                    {processedResult.invalidRows.length} row(s)
+                  </div>
+                </div>
+                <div className="hf-ticket" style={{ padding: "8px 12px" }}>
+                  <div className="hf-kpi-label">Stock Value to Add</div>
+                  <div className="mono text-profit" style={{ fontSize: 16, fontWeight: 700, marginTop: 2 }}>
+                    {fmt(processedResult.totalEstimatedStockValue)}
+                  </div>
+                </div>
               </div>
 
-              {processedResult.invalidRows.length > 0 && activeReviewTab === "invalid" && (
-                <button
-                  type="button"
-                  className="hf-btn hf-btn-ghost"
-                  style={{ fontSize: 11.5, padding: "4px 8px", color: "var(--red)", borderColor: "var(--red)" }}
-                  onClick={() => exportInvalidRowsCSV(processedResult.invalidRows)}
-                >
-                  <Download size={13} /> Export Problem Rows (.csv)
-                </button>
+              {/* Tab Switcher & Export Issue Rows */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button
+                    type="button"
+                    onClick={() => { setActiveReviewTab("valid"); setReviewPage(1); }}
+                    className="hf-btn"
+                    style={{
+                      fontSize: 12,
+                      padding: "5px 12px",
+                      background: activeReviewTab === "valid" ? "var(--green)" : "var(--surface-hover)",
+                      color: activeReviewTab === "valid" ? "#fff" : "var(--ink)",
+                      borderRadius: 6,
+                      fontWeight: 700
+                    }}
+                  >
+                    ✓ Ready to Import ({processedResult.validRows.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setActiveReviewTab("invalid"); setReviewPage(1); }}
+                    className="hf-btn"
+                    style={{
+                      fontSize: 12,
+                      padding: "5px 12px",
+                      background: activeReviewTab === "invalid" ? "var(--red)" : "var(--surface-hover)",
+                      color: activeReviewTab === "invalid" ? "#fff" : "var(--ink)",
+                      borderRadius: 6,
+                      fontWeight: 700
+                    }}
+                  >
+                    ⚠ Needs Attention ({processedResult.invalidRows.length})
+                  </button>
+                </div>
+
+                {processedResult.invalidRows.length > 0 && activeReviewTab === "invalid" && (
+                  <button
+                    type="button"
+                    className="hf-btn hf-btn-ghost"
+                    style={{ fontSize: 11.5, padding: "4px 8px", color: "var(--red)", borderColor: "var(--red)" }}
+                    onClick={() => exportInvalidRowsCSV(processedResult.invalidRows)}
+                  >
+                    <Download size={13} /> Export Problem Rows (.csv)
+                  </button>
+                )}
+              </div>
+
+              {/* Table of Rows */}
+              <div style={{ flex: 1, minHeight: 0, overflowY: "auto", border: "1px solid var(--line)", borderRadius: 8, marginBottom: 6 }}>
+                {activeReviewTab === "valid" ? (
+                  <table className="hf-table" style={{ fontSize: 12 }}>
+                    <thead style={{ position: "sticky", top: 0, background: "var(--surface)", zIndex: 10 }}>
+                      <tr>
+                        <th style={{ width: 40 }}>#</th>
+                        <th>Product Name</th>
+                        <th>Category</th>
+                        <th>Unit</th>
+                        <th>Cost (KSh)</th>
+                        <th>Retail (KSh)</th>
+                        <th>Contractor</th>
+                        <th>Opening Stock</th>
+                        <th style={{ textAlign: "right" }}>Stock Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paginatedReviewRows.map((r, idx) => (
+                        <tr key={idx}>
+                          <td className="mono" style={{ color: "var(--ink-soft)" }}>{r._rowNumber}</td>
+                          <td>
+                            <strong>{r.name}</strong>
+                            {r.brand && <span style={{ color: "var(--ink-soft)", fontSize: 11 }}> ({r.brand})</span>}
+                            {r.warnings && r.warnings.length > 0 && (
+                              <div style={{ fontSize: 10.5, color: "var(--amber)", marginTop: 2, display: "flex", flexDirection: "column", gap: 1 }}>
+                                {r.warnings.map((w, wi) => (
+                                  <span key={wi}>{w}</span>
+                                ))}
+                              </div>
+                            )}
+                          </td>
+                          <td>{r.category}</td>
+                          <td className="mono">{r.baseUnit}</td>
+                          <td className="mono">{fmt(r.buyPrice)}</td>
+                          <td className="mono text-profit" style={{ fontWeight: 600 }}>{fmt(r.sellPrice)}</td>
+                          <td className="mono">{fmt(r.contractorPrice)}</td>
+                          <td className="mono" style={{ fontWeight: 700 }}>{r.stock}</td>
+                          <td className="mono text-profit" style={{ textAlign: "right", fontWeight: 700 }}>
+                            {fmt(r.stock * (r.buyPrice > 0 ? r.buyPrice : r.sellPrice))}
+                          </td>
+                        </tr>
+                      ))}
+                      {processedResult.validRows.length === 0 && (
+                        <tr>
+                          <td colSpan={9} style={{ textAlign: "center", padding: 24, color: "var(--ink-soft)" }}>
+                            No valid products found. Please adjust column mappings in Step 2.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                ) : (
+                  <table className="hf-table" style={{ fontSize: 12 }}>
+                    <thead style={{ position: "sticky", top: 0, background: "var(--surface)", zIndex: 10 }}>
+                      <tr>
+                        <th style={{ width: 40 }}>#</th>
+                        <th>Product Name in File</th>
+                        <th>Sheet</th>
+                        <th>Price / Cost</th>
+                        <th>Stock</th>
+                        <th>Problem Identified</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paginatedReviewRows.map((r, idx) => (
+                        <tr key={idx} style={{ background: "rgba(220, 50, 50, 0.05)" }}>
+                          <td className="mono" style={{ color: "var(--red)", fontWeight: 700 }}>{r._rowNumber}</td>
+                          <td style={{ fontWeight: 600, color: r.name ? "var(--ink)" : "var(--red)" }}>
+                            {r.name || "MISSING NAME"}
+                          </td>
+                          <td>{r._sheetName}</td>
+                          <td className="mono">{fmt(r.sellPrice || r.buyPrice)}</td>
+                          <td className="mono">{r.stock}</td>
+                          <td>
+                            <div style={{ color: "var(--red)", fontWeight: 600 }}>
+                              ⚠ {(r.reasons || []).join("; ")}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                      {processedResult.invalidRows.length === 0 && (
+                        <tr>
+                          <td colSpan={6} style={{ textAlign: "center", padding: 24, color: "var(--green)" }}>
+                            ✓ Perfect! 100% of rows are clean and ready to import with no issues detected.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              {/* Review Pagination Bar */}
+              {currentReviewRows.length > reviewPageSize && (
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 12px", background: "var(--surface-hover)", borderRadius: 7, marginBottom: 8 }}>
+                  <div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>
+                    Showing {((reviewPage - 1) * reviewPageSize) + 1}–{Math.min(reviewPage * reviewPageSize, currentReviewRows.length)} of {currentReviewRows.length} rows
+                  </div>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <button
+                      type="button"
+                      className="hf-btn hf-btn-ghost"
+                      style={{ padding: "3px 8px", fontSize: 11 }}
+                      disabled={reviewPage <= 1}
+                      onClick={() => setReviewPage(p => Math.max(1, p - 1))}
+                    >
+                      ← Prev
+                    </button>
+                    <span style={{ fontSize: 11.5, fontWeight: 600 }}>Page {reviewPage} / {reviewTotalPages}</span>
+                    <button
+                      type="button"
+                      className="hf-btn hf-btn-ghost"
+                      style={{ padding: "3px 8px", fontSize: 11 }}
+                      disabled={reviewPage >= reviewTotalPages}
+                      onClick={() => setReviewPage(p => Math.min(reviewTotalPages, p + 1))}
+                    >
+                      Next →
+                    </button>
+                  </div>
+                </div>
               )}
             </div>
-
-            {/* Table of Rows */}
-            <div style={{ flex: 1, minHeight: 0, overflowY: "auto", border: "1px solid var(--line)", borderRadius: 8, marginBottom: 12 }}>
-              {activeReviewTab === "valid" ? (
-                <table className="hf-table" style={{ fontSize: 12 }}>
-                  <thead style={{ position: "sticky", top: 0, background: "var(--surface)", zIndex: 10 }}>
-                    <tr>
-                      <th style={{ width: 40 }}>#</th>
-                      <th>Product Name</th>
-                      <th>Category</th>
-                      <th>Unit</th>
-                      <th>Cost (KSh)</th>
-                      <th>Retail (KSh)</th>
-                      <th>Contractor</th>
-                      <th>Opening Stock</th>
-                      <th style={{ textAlign: "right" }}>Stock Value</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {processedResult.validRows.map((r, idx) => (
-                      <tr key={idx}>
-                        <td className="mono" style={{ color: "var(--ink-soft)" }}>{r._rowNumber}</td>
-                        <td>
-                          <strong>{r.name}</strong>
-                          {r.brand && <span style={{ color: "var(--ink-soft)", fontSize: 11 }}> ({r.brand})</span>}
-                        </td>
-                        <td>{r.category}</td>
-                        <td className="mono">{r.baseUnit}</td>
-                        <td className="mono">{fmt(r.buyPrice)}</td>
-                        <td className="mono text-profit" style={{ fontWeight: 600 }}>{fmt(r.sellPrice)}</td>
-                        <td className="mono">{fmt(r.contractorPrice)}</td>
-                        <td className="mono" style={{ fontWeight: 700 }}>{r.stock}</td>
-                        <td className="mono text-profit" style={{ textAlign: "right", fontWeight: 700 }}>
-                          {fmt(r.stock * (r.buyPrice > 0 ? r.buyPrice : r.sellPrice))}
-                        </td>
-                      </tr>
-                    ))}
-                    {processedResult.validRows.length === 0 && (
-                      <tr>
-                        <td colSpan={9} style={{ textAlign: "center", padding: 24, color: "var(--ink-soft)" }}>
-                          No valid products found. Please adjust column mappings in Step 2.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              ) : (
-                <table className="hf-table" style={{ fontSize: 12 }}>
-                  <thead style={{ position: "sticky", top: 0, background: "var(--surface)", zIndex: 10 }}>
-                    <tr>
-                      <th style={{ width: 40 }}>#</th>
-                      <th>Product Name in File</th>
-                      <th>Sheet</th>
-                      <th>Price / Cost</th>
-                      <th>Stock</th>
-                      <th>Problem Identified</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {processedResult.invalidRows.map((r, idx) => (
-                      <tr key={idx} style={{ background: "rgba(220, 50, 50, 0.05)" }}>
-                        <td className="mono" style={{ color: "var(--red)", fontWeight: 700 }}>{r._rowNumber}</td>
-                        <td style={{ fontWeight: 600, color: r.name ? "var(--ink)" : "var(--red)" }}>
-                          {r.name || "MISSING NAME"}
-                        </td>
-                        <td>{r._sheetName}</td>
-                        <td className="mono">{fmt(r.sellPrice || r.buyPrice)}</td>
-                        <td className="mono">{r.stock}</td>
-                        <td>
-                          <div style={{ color: "var(--red)", fontWeight: 600 }}>
-                            ⚠ {(r.reasons || []).join("; ")}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                    {processedResult.invalidRows.length === 0 && (
-                      <tr>
-                        <td colSpan={6} style={{ textAlign: "center", padding: 24, color: "var(--green)" }}>
-                          ✓ Perfect! 100% of rows are clean and ready to import with no issues detected.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* Bottom Actions Bar */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid var(--line)", paddingTop: 12, marginTop: "auto" }}>
@@ -4048,6 +4264,8 @@ function Inventory({ db, setDb, role, notify, currentUser, onReceiveShortcut }) 
   const [query, setQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [selected, setSelected] = useState(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 50;
   const [showNew, setShowNew] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [showAdjustment, setShowAdjustment] = useState(false);
@@ -4071,6 +4289,11 @@ function Inventory({ db, setDb, role, notify, currentUser, onReceiveShortcut }) 
     return ["all", ...Array.from(set)];
   }, [db.products]);
 
+  // Reset to page 1 on search or category filter change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [query, selectedCategory]);
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return (db.products || []).filter(p => {
@@ -4084,6 +4307,12 @@ function Inventory({ db, setDb, role, notify, currentUser, onReceiveShortcut }) 
       );
     });
   }, [db.products, query, selectedCategory]);
+
+  const totalPages = Math.ceil(filtered.length / pageSize) || 1;
+  const paginatedProducts = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filtered.slice(start, start + pageSize);
+  }, [filtered, currentPage, pageSize]);
 
   const activeProduct = selected ? db.products.find(p => p.id === selected) : null;
 
@@ -4505,7 +4734,7 @@ function Inventory({ db, setDb, role, notify, currentUser, onReceiveShortcut }) 
             </tr>
           </thead>
           <tbody>
-            {filtered.map(p => {
+            {paginatedProducts.map(p => {
               const low = (p.stock || 0) <= (p.minStock || 0);
               const supplier = db.suppliers.find(s => s.id === p.supplierId);
               const unitCost = getProductUnitCost(p);
@@ -4551,7 +4780,7 @@ function Inventory({ db, setDb, role, notify, currentUser, onReceiveShortcut }) 
 
       {/* 2. Mobile Card List View (Thumb-Friendly for Smartphones) */}
       <div className="hf-mobile-only" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {filtered.map(p => {
+        {paginatedProducts.map(p => {
           const low = (p.stock || 0) <= (p.minStock || 0);
           const supplier = db.suppliers.find(s => s.id === p.supplierId);
           const unitCost = getProductUnitCost(p);
@@ -4614,13 +4843,44 @@ function Inventory({ db, setDb, role, notify, currentUser, onReceiveShortcut }) 
             </div>
           );
         })}
-
         {filtered.length === 0 && (
-          <div className="hf-card" style={{ padding: 24, textAlign: "center", color: "var(--ink-soft)" }}>
-            No products found matching "{query}".
+          <div className="hf-card" style={{ padding: 24, textAlign: "center", color: "var(--ink-soft)", fontSize: 13 }}>
+            No inventory products match "{query}".
           </div>
         )}
       </div>
+
+      {/* Inventory Pagination Navigation Bar */}
+      {filtered.length > pageSize && (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", background: "var(--surface)", border: "1px solid var(--line)", borderRadius: 10, marginTop: 12, flexWrap: "wrap", gap: 8 }}>
+          <div style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>
+            Showing <b>{((currentPage - 1) * pageSize) + 1}–{Math.min(currentPage * pageSize, filtered.length)}</b> of <b>{filtered.length.toLocaleString()}</b> products
+          </div>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <button
+              type="button"
+              className="hf-btn hf-btn-ghost"
+              style={{ padding: "5px 12px", fontSize: 12 }}
+              disabled={currentPage <= 1}
+              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+            >
+              ← Previous
+            </button>
+            <span style={{ fontSize: 12.5, fontWeight: 700, padding: "0 4px" }}>
+              Page {currentPage} of {totalPages}
+            </span>
+            <button
+              type="button"
+              className="hf-btn hf-btn-ghost"
+              style={{ padding: "5px 12px", fontSize: 12 }}
+              disabled={currentPage >= totalPages}
+              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+            >
+              Next →
+            </button>
+          </div>
+        </div>
+      )}
 
       {activeProduct && (
         <ProductDrawer
@@ -5328,6 +5588,7 @@ function Receiving({ db, setDb, notify, currentUser, prefill, onClearPrefill }) 
 
         return {
           ...p,
+          supplierId: p.supplierId || supp?.id || "",
           stock: newStock,
           buyPrice: newBuy,
           history: [
