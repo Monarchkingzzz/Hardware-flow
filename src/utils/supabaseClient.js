@@ -6,19 +6,21 @@ const DEFAULT_SUPABASE_URL = "https://indkvllqwmccwpdwfxnv.supabase.co";
 const DEFAULT_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImluZGt2bGxxd21jY3dwZHdmeG52Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcxMjEwODYsImV4cCI6MjEwMjY5NzA4Nn0.JlizG02YVBCLpH8-DOwInykCkDfSvGgkZaR4mTg-VLg";
 
 export function getSupabaseCredentials() {
-  const envUrl = import.meta.env.VITE_SUPABASE_URL;
-  const envKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+  const envUrl = typeof import.meta !== "undefined" && import.meta.env ? import.meta.env.VITE_SUPABASE_URL : null;
+  const envKey = typeof import.meta !== "undefined" && import.meta.env ? import.meta.env.VITE_SUPABASE_ANON_KEY : null;
 
   if (envUrl && envKey) {
     return { url: envUrl.trim(), key: envKey.trim(), source: "env" };
   }
 
   try {
-    const saved = localStorage.getItem(SUPABASE_CONFIG_KEY);
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      if (parsed.url && parsed.key) {
-        return { url: parsed.url.trim(), key: parsed.key.trim(), source: "local" };
+    if (typeof localStorage !== "undefined") {
+      const saved = localStorage.getItem(SUPABASE_CONFIG_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.url && parsed.key) {
+          return { url: parsed.url.trim(), key: parsed.key.trim(), source: "local" };
+        }
       }
     }
   } catch (err) {
