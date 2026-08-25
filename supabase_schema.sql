@@ -115,6 +115,7 @@ create table if not exists public.audit_log (
   action text not null,
   detail text,
   target text,
+  metadata jsonb default '{}'::jsonb,
   created_at timestamptz default now()
 );
 

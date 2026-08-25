@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, Component } from "react";
 import {
   LayoutDashboard, ShoppingCart, Package, Truck, Building2, Users, CreditCard,
-  FileText, BookOpen, BarChart3, ShieldAlert, Lock, Search, Plus, X, Check,
+  FileText, BookOpen, BarChart3, ShieldAlert, ShieldCheck, Lock, Search, Plus, X, Check,
   AlertTriangle, TrendingUp, TrendingDown, ChevronRight, Minus, Trash2,
   ArrowRight, Receipt as ReceiptIcon, Download, Eye, EyeOff, Calendar,
   Award, CheckCircle2, Sun, Moon,
@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import {
   exportAuditLogPDF,
+  exportAuditLogCSV,
   exportInventoryPDF,
   exportReportCenterPDF,
   exportReceiptPDF,
@@ -493,11 +494,139 @@ function buildSeed() {
   ];
 
   const auditLog = [
-    { id: uid("LOG"), time: todayISO(0) + " 13:40", user: "John", role: "Cashier", category: "Sale", action: "Sold 13 × Cement 50kg", detail: fmt(10140) + " (INV-2026-00453)", target: "Cement 50kg" },
-    { id: uid("LOG"), time: todayISO(0) + " 11:15", user: "John", role: "Cashier", category: "Credit Sale", action: "Recorded credit sale for XYZ Contractors", detail: fmt(30600) + " (INV-2026-00452)", target: "XYZ Contractors" },
-    { id: uid("LOG"), time: todayISO(0) + " 10:15", user: "Mary", role: "Storekeeper", category: "Stock Received", action: "Received 100 × Cement 50kg", detail: "from Bamburi & ABC Supplies", target: "Cement 50kg" },
-    { id: uid("LOG"), time: todayISO(-1) + " 11:02", user: "Owner", role: "Owner", category: "Price Change", action: "Changed selling price — Cement 50kg", detail: "750 → 780 KSh", target: "Cement 50kg" },
-    { id: uid("LOG"), time: todayISO(-1) + " 11:43", user: "Mary", role: "Storekeeper", category: "Adjustment", action: "Stock adjustment — Cement 50kg", detail: "-2 bags, reason: Damage — Torn bags during handling", target: "Cement 50kg" },
+    {
+      id: uid("LOG"),
+      time: todayISO(0) + " 13:40",
+      user: "John",
+      role: "Cashier",
+      category: "Sale",
+      action: "Completed CASH Sale (13 units, 1 product) — INV-2026-00453",
+      detail: `Items: 13 × Cement 50kg @ KSh 780 = KSh 10,140 | Total: KSh 10,140 via CASH | Customer: Walk-in | Margin: +KSh 1,690 (+16.7%)`,
+      target: "INV-2026-00453",
+      metadata: {
+        type: "sale",
+        invoiceNo: "INV-2026-00453",
+        total: 10140,
+        cost: 8450,
+        profit: 1690,
+        payment: "cash",
+        customerName: "Walk-in Customer",
+        itemCount: 1,
+        totalQty: 13,
+        items: [
+          { productId: "p1", name: "Cement 50kg", qty: 13, unit: "bag", unitPrice: 780, unitCost: 650, lineTotal: 10140 }
+        ]
+      }
+    },
+    {
+      id: uid("LOG"),
+      time: todayISO(0) + " 11:15",
+      user: "John",
+      role: "Cashier",
+      category: "Credit Sale",
+      action: "Recorded Credit Sale for XYZ Contractors (208 units, 2 products) — INV-2026-00452",
+      detail: `Items: 200 × Electrical Cable 2.5mm @ KSh 95 = KSh 19,000, 8 × Gloss Paint 4L @ KSh 1,450 = KSh 11,600 | Total: KSh 30,600 via CREDIT | Account: XYZ Contractors | Ledger Balance: KSh 180,600`,
+      target: "INV-2026-00452",
+      metadata: {
+        type: "credit_sale",
+        invoiceNo: "INV-2026-00452",
+        total: 30600,
+        cost: 21600,
+        profit: 9000,
+        payment: "credit",
+        customerId: "c3",
+        customerName: "XYZ Contractors",
+        isCredit: true,
+        itemCount: 2,
+        totalQty: 208,
+        items: [
+          { productId: "p2", name: "Electrical Cable 2.5mm", qty: 200, unit: "metre", unitPrice: 95, unitCost: 85, lineTotal: 19000 },
+          { productId: "p5", name: "Gloss Paint 4L", qty: 8, unit: "tin", unitPrice: 1450, unitCost: 1000, lineTotal: 11600 }
+        ]
+      }
+    },
+    {
+      id: uid("LOG"),
+      time: todayISO(0) + " 10:15",
+      user: "Mary",
+      role: "Storekeeper",
+      category: "Stock Received",
+      action: "Received Stock Delivery PO-1001 from Bamburi & ABC Supplies (On Credit)",
+      detail: `Items: 130 × Cement 50kg @ KSh 650 = KSh 84,500 | Total Order Value: KSh 85,000 | Storekeeper: Mary`,
+      target: "PO-1001",
+      metadata: {
+        type: "stock_received",
+        poNumber: "PO-1001",
+        supplierId: "s1",
+        supplierName: "Bamburi & ABC Supplies",
+        total: 85000,
+        paymentMode: "credit",
+        items: [
+          { productId: "p1", name: "Cement 50kg", qty: 130, unit: "bag", unitBuyPrice: 650, lineTotal: 84500 }
+        ]
+      }
+    },
+    {
+      id: uid("LOG"),
+      time: todayISO(-1) + " 11:02",
+      user: "Shop Owner",
+      role: "Owner",
+      category: "Price Change",
+      action: "Updated selling price for Cement 50kg (CEM-001)",
+      detail: `Selling Price adjusted: KSh 750 → KSh 780 (+KSh 30/bag) · Contractor Price: KSh 750 · Wholesale: KSh 730`,
+      target: "Cement 50kg",
+      metadata: {
+        type: "price_change",
+        productId: "p1",
+        name: "Cement 50kg",
+        sku: "CEM-001",
+        diffs: [
+          { field: "sellPrice", label: "Retail Sell Price", oldVal: 750, newVal: 780 }
+        ]
+      }
+    },
+    {
+      id: uid("LOG"),
+      time: todayISO(-1) + " 11:43",
+      user: "Mary",
+      role: "Storekeeper",
+      category: "Stock Adjustment",
+      action: "Adjusted stock for Cement 50kg: -2 bags (ADJ-1001)",
+      detail: `Reason: Damage — Torn bags during offloading · Prior stock: 265 → New stock: 263 bags · Value Impact: -KSh 1,300`,
+      target: "Cement 50kg",
+      metadata: {
+        type: "adjustment",
+        productId: "p1",
+        name: "Cement 50kg",
+        mode: "decrease",
+        qty: 2,
+        unit: "bag",
+        prevStock: 265,
+        newStock: 263,
+        reason: "Damage — Torn bags during offloading",
+        valueImpact: -1300
+      }
+    },
+    {
+      id: uid("LOG"),
+      time: todayISO(-2) + " 14:00",
+      user: "Shop Owner",
+      role: "Owner",
+      category: "Customer Payment",
+      action: "Received Debt Payment from ABC Construction Ltd",
+      detail: `Amount: KSh 25,000 via MPESA (Ref: QKA8921KL) · Prior Debt: KSh 437,500 → Remaining Debt: KSh 412,500`,
+      target: "ABC Construction Ltd",
+      metadata: {
+        type: "customer_payment",
+        customerId: "c1",
+        customerName: "ABC Construction Ltd",
+        amount: 25000,
+        method: "mpesa",
+        reference: "QKA8921KL",
+        prevBalance: 437500,
+        newBalance: 412500
+      }
+    }
   ];
 
   return {
@@ -678,7 +807,7 @@ function useDB() {
   useEffect(() => {
     let cloudPullTimeout = null;
     const unsubscribe = subscribeToSupabaseRealtime(async () => {
-      // Avoid pulling our own echo while an active push is in flight
+      // Avoid pulling our own echo while an active push or local mutation is in flight
       if (getIsSyncing()) return;
 
       if (cloudPullTimeout) clearTimeout(cloudPullTimeout);
@@ -686,112 +815,88 @@ function useDB() {
         try {
           if (getIsSyncing()) return;
           const cloudDb = await pullDatabaseFromSupabase();
-          if (cloudDb && cloudDb.products && cloudDb.products.length > 0) {
-            setDb(prevLocal => {
-              if (!prevLocal) return cloudDb;
+          if (!cloudDb) return;
+          if (getIsSyncing()) return;
 
-              // Non-destructive merge: preserve local records in transit so they aren't erased by cloud pull
-              const cloudCustIds = new Set((cloudDb.customers || []).map(c => c.id));
-              const pendingLocalCustomers = (prevLocal.customers || []).filter(c => !cloudCustIds.has(c.id));
-              const mergedCustomers = [...pendingLocalCustomers, ...(cloudDb.customers || [])];
+          setDb(prevLocal => {
+            if (!prevLocal) return cloudDb;
+            if (getIsSyncing()) return prevLocal;
 
-              const cloudSuppIds = new Set((cloudDb.suppliers || []).map(s => s.id));
-              const pendingLocalSuppliers = (prevLocal.suppliers || []).filter(s => !cloudSuppIds.has(s.id));
-              const mergedSuppliers = [...pendingLocalSuppliers, ...(cloudDb.suppliers || [])];
+            // Intelligently merge users: preserve any newly updated password or pin
+            const localUsersByUsername = new Map(
+              (prevLocal.users || []).map(u => [String(u.username || "").toLowerCase().trim(), u])
+            );
 
-              const cloudProdIds = new Set((cloudDb.products || []).map(p => p.id));
-              const pendingLocalProducts = (prevLocal.products || []).filter(p => !cloudProdIds.has(p.id));
-              const mergedProducts = [...pendingLocalProducts, ...(cloudDb.products || [])];
+            const mergedUsers = (cloudDb.users && cloudDb.users.length > 0)
+              ? cloudDb.users.map(cloudU => {
+                  const cleanUser = String(cloudU.username || "").toLowerCase().trim();
+                  const localU = localUsersByUsername.get(cleanUser);
+                  localUsersByUsername.delete(cleanUser);
 
-              const cloudPurchaseIds = new Set((cloudDb.purchases || []).map(p => p.id || p.poNumber));
-              const pendingLocalPurchases = (prevLocal.purchases || []).filter(p => !cloudPurchaseIds.has(p.id) && !cloudPurchaseIds.has(p.poNumber));
-              const mergedPurchases = [...pendingLocalPurchases, ...(cloudDb.purchases || [])];
+                  let resolvedPass = cloudU.password;
+                  if ((!resolvedPass || !resolvedPass.startsWith("pbkdf2:")) && localU?.password?.startsWith("pbkdf2:")) {
+                    resolvedPass = localU.password;
+                  }
 
-              const cloudQuoteIds = new Set((cloudDb.quotations || []).map(q => q.number || q.id));
-              const pendingLocalQuotations = (prevLocal.quotations || []).filter(q => !cloudQuoteIds.has(q.number) && !cloudQuoteIds.has(q.id));
-              const mergedQuotations = [...pendingLocalQuotations, ...(cloudDb.quotations || [])];
+                  let resolvedPin = cloudU.pin;
+                  if ((!resolvedPin || !resolvedPin.startsWith("pbkdf2:")) && localU?.pin?.startsWith("pbkdf2:")) {
+                    resolvedPin = localU.pin;
+                  }
 
-              const cloudSaleInvoices = new Set((cloudDb.sales || []).map(s => s.invoiceNo || s.id));
-              const pendingLocalSales = (prevLocal.sales || []).filter(s => (s.offline === true || !cloudSaleInvoices.has(s.invoiceNo)) && !cloudSaleInvoices.has(s.id));
+                  return {
+                    ...localU,
+                    ...cloudU,
+                    id: cloudU.id || localU?.id,
+                    username: cleanUser,
+                    password: resolvedPass || localU?.password || cloudU.password,
+                    pin: resolvedPin || localU?.pin || cloudU.pin || "8888",
+                    role: cloudU.role || localU?.role || "cashier",
+                    name: cloudU.name || localU?.name || cleanUser,
+                  };
+                })
+              : (prevLocal.users || []);
 
-              const cloudExpIds = new Set((cloudDb.expenses || []).map(e => e.id));
-              const pendingLocalExpenses = (prevLocal.expenses || []).filter(e => (e.offline === true || !cloudExpIds.has(e.id)));
+            for (const remainingLocalU of localUsersByUsername.values()) {
+              mergedUsers.push(remainingLocalU);
+            }
 
-              // Intelligently merge users: preserve any newly updated password or pin
-              const localUsersByUsername = new Map(
-                (prevLocal.users || []).map(u => [String(u.username || "").toLowerCase().trim(), u])
-              );
+            // Preserve local offline queued sales/expenses only
+            const cloudSaleInvoices = new Set((cloudDb.sales || []).map(s => s.invoiceNo || s.id));
+            const pendingLocalSales = (prevLocal.sales || []).filter(s => s.offline === true && !cloudSaleInvoices.has(s.invoiceNo) && !cloudSaleInvoices.has(s.id));
 
-              const mergedUsers = (cloudDb.users && cloudDb.users.length > 0)
-                ? cloudDb.users.map(cloudU => {
-                    const cleanUser = String(cloudU.username || "").toLowerCase().trim();
-                    const localU = localUsersByUsername.get(cleanUser);
-                    localUsersByUsername.delete(cleanUser);
+            const cloudExpIds = new Set((cloudDb.expenses || []).map(e => e.id));
+            const pendingLocalExpenses = (prevLocal.expenses || []).filter(e => e.offline === true && !cloudExpIds.has(e.id));
 
-                    let resolvedPass = cloudU.password;
-                    if ((!resolvedPass || !resolvedPass.startsWith("pbkdf2:")) && localU?.password?.startsWith("pbkdf2:")) {
-                      resolvedPass = localU.password;
-                    }
+            const merged = {
+              ...cloudDb,
+              users: mergedUsers,
+              products: cloudDb.products || [],
+              customers: cloudDb.customers || [],
+              suppliers: cloudDb.suppliers || [],
+              purchases: cloudDb.purchases || [],
+              quotations: cloudDb.quotations || [],
+              sales: [...pendingLocalSales, ...(cloudDb.sales || [])],
+              expenses: [...pendingLocalExpenses, ...(cloudDb.expenses || [])],
+              auditLog: cloudDb.auditLog || prevLocal.auditLog || [],
+              invoiceSeq: Math.max(cloudDb.invoiceSeq || 0, prevLocal.invoiceSeq || 0),
+              quoteSeq: Math.max(cloudDb.quoteSeq || 0, prevLocal.quoteSeq || 0),
+              poSeq: Math.max(cloudDb.poSeq || 0, prevLocal.poSeq || 0),
+              adjSeq: Math.max(cloudDb.adjSeq || 0, prevLocal.adjSeq || 0),
+              settings: {
+                ...(prevLocal.settings || {}),
+                ...(cloudDb.settings || {}),
+              },
+            };
 
-                    let resolvedPin = cloudU.pin;
-                    if ((!resolvedPin || !resolvedPin.startsWith("pbkdf2:")) && localU?.pin?.startsWith("pbkdf2:")) {
-                      resolvedPin = localU.pin;
-                    }
-
-                    return {
-                      ...localU,
-                      ...cloudU,
-                      id: cloudU.id || localU?.id,
-                      username: cleanUser,
-                      password: resolvedPass || localU?.password || cloudU.password,
-                      pin: resolvedPin || localU?.pin || cloudU.pin || "8888",
-                      role: cloudU.role || localU?.role || "cashier",
-                      name: cloudU.name || localU?.name || cleanUser,
-                    };
-                  })
-                : (prevLocal.users || []);
-
-              for (const remainingLocalU of localUsersByUsername.values()) {
-                mergedUsers.push(remainingLocalU);
-              }
-
-              // Non-destructive merge for audit logs in realtime
-              const cloudLogIds = new Set((cloudDb.auditLog || []).map(a => a.id));
-              const pendingLocalLogs = (prevLocal.auditLog || []).filter(a => a.id && !cloudLogIds.has(a.id));
-              const mergedAuditLogs = [...pendingLocalLogs, ...(cloudDb.auditLog || [])];
-              mergedAuditLogs.sort((a, b) => (b.time || "").localeCompare(a.time || ""));
-
-              const merged = {
-                ...cloudDb,
-                users: mergedUsers,
-                customers: mergedCustomers,
-                suppliers: mergedSuppliers,
-                products: mergedProducts,
-                purchases: mergedPurchases,
-                quotations: mergedQuotations,
-                sales: [...pendingLocalSales, ...(cloudDb.sales || [])],
-                expenses: [...pendingLocalExpenses, ...(cloudDb.expenses || [])],
-                auditLog: mergedAuditLogs,
-                invoiceSeq: Math.max(cloudDb.invoiceSeq || 0, prevLocal.invoiceSeq || 0),
-                quoteSeq: Math.max(cloudDb.quoteSeq || 0, prevLocal.quoteSeq || 0),
-                poSeq: Math.max(cloudDb.poSeq || 0, prevLocal.poSeq || 0),
-                adjSeq: Math.max(cloudDb.adjSeq || 0, prevLocal.adjSeq || 0),
-                settings: {
-                  ...(prevLocal.settings || {}),
-                  ...(cloudDb.settings || {}),
-                },
-              };
-
-              try {
-                localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
-              } catch (e) {
-                console.error(e);
-              }
-              return merged;
-            });
-          }
+            try {
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+            } catch (e) {
+              console.error(e);
+            }
+            return merged;
+          });
         } catch (err) {
-          console.warn("[HardwareFlow] Realtime sync refresh notice:", err);
+          console.warn("[Realtime Sync Notice]", err);
         }
       }, 300);
     });
@@ -1271,10 +1376,20 @@ function PinVerificationModal({ isOpen, title, description, onSuccess, onCancel,
   const [error, setError] = useState("");
   const [isVerifying, setIsVerifying] = useState(false);
 
+  useEffect(() => {
+    if (isOpen) {
+      setPin("");
+      setError("");
+      setShowPin(false);
+      setIsVerifying(false);
+    }
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   async function handleVerify(e) {
     if (e) e.preventDefault();
+    if (isVerifying) return;
     setError("");
     if (!pin.trim()) {
       setError("Please enter the Store Security PIN.");
@@ -1287,14 +1402,15 @@ function PinVerificationModal({ isOpen, title, description, onSuccess, onCancel,
       if (isValid) {
         setPin("");
         setError("");
+        setIsVerifying(false);
         onSuccess();
       } else {
         setError("Incorrect Store Security PIN. Check with shop owner.");
+        setIsVerifying(false);
       }
     } catch (err) {
       console.error(err);
       setError("Verification failed. Please try again.");
-    } finally {
       setIsVerifying(false);
     }
   }
@@ -2380,25 +2496,74 @@ function POS({ db, setDb, role, notify, currentUser }) {
         return m ? parseInt(m[0], 10) : 0;
       });
       const resolvedSeq = Math.max(nextSeqNum, ...allPrevInvSeqs) + 1;
+      const customerObj = (prev.customers || []).find(c => c.id === customerId);
+      const customerName = customerObj ? customerObj.name : "Walk-in Customer";
+      const totalQty = saleItems.reduce((a, b) => a + (Number(b.qty) || 0), 0);
+      const itemsDetailText = saleItems.map(i => {
+        const prod = (prev.products || []).find(p => p.id === i.productId);
+        const u = prod?.baseUnit || "piece";
+        return `${i.qty} ${formatUnit(i.qty, u)} × ${i.name || prod?.name || 'Item'} @ ${fmt(i.unitPrice)} (= ${fmt(i.qty * i.unitPrice)})`;
+      }).join(", ");
+
+      const isCredit = payment === "credit";
+      const isSplit = payment === "split";
+      let payDesc = payment.toUpperCase();
+      if (isSplit) {
+        payDesc = `SPLIT (Cash: ${fmt(splitCash)}, Rest: M-Pesa/Bank ${fmt(total - Number(splitCash || 0))})`;
+      }
+
+      const auditDetail = `Items: ${itemsDetailText} | Total: ${fmt(total)} via ${payDesc} | Customer: ${customerName}${isCredit ? " (Credit Balance Updated)" : ""}${!navigator.onLine ? " (Offline Mode)" : ""}`;
+
+      const auditCategory = isCredit ? "Credit Sale" : (isSplit ? "Split Sale" : "Sale");
+      const auditAction = isCredit 
+        ? `Recorded Credit Sale for ${customerName} (${totalQty} items, ${saleItems.length} products) — ${resolvedInvoiceNo}`
+        : `Completed ${payment.toUpperCase()} Sale (${totalQty} items, ${saleItems.length} products) — ${resolvedInvoiceNo}`;
+
+      const auditEntry = {
+        id: uid("LOG"),
+        time: `${sale.date} ${timeStr}`,
+        user: sale.employee,
+        role: role === "owner" ? "Owner" : (role === "admin" ? "Admin" : "Cashier"),
+        category: auditCategory,
+        action: auditAction,
+        detail: auditDetail,
+        target: resolvedInvoiceNo,
+        metadata: {
+          type: isCredit ? "credit_sale" : "sale",
+          invoiceNo: resolvedInvoiceNo,
+          total,
+          cost,
+          profit,
+          payment,
+          splitCash: isSplit ? Number(splitCash || 0) : null,
+          customerId: isCredit || customerId ? customerId : null,
+          customerName,
+          isCredit,
+          offline: !navigator.onLine,
+          itemCount: saleItems.length,
+          totalQty,
+          items: saleItems.map(i => {
+            const prod = (prev.products || []).find(p => p.id === i.productId);
+            return {
+              productId: i.productId,
+              name: i.name || prod?.name || "Product",
+              sku: prod?.sku || "",
+              qty: i.qty,
+              unit: prod?.baseUnit || "piece",
+              unitPrice: i.unitPrice,
+              unitCost: i.unitCost,
+              lineTotal: i.qty * i.unitPrice,
+            };
+          }),
+        }
+      };
 
       return {
         ...prev,
         products,
         sales: [sale, ...prev.sales],
         invoiceSeq: resolvedSeq,
-        auditLog: [
-          {
-            id: uid("LOG"),
-            time: `${sale.date} ${timeStr}`,
-            user: sale.employee,
-            role: role === "owner" ? "Owner" : "Cashier",
-            category: payment === "credit" ? "Credit Sale" : "Sale",
-            action: `Sold ${saleItems.map(i=>i.qty).reduce((a,b)=>a+b,0)} item(s) — ${resolvedInvoiceNo}`,
-            detail: `${fmt(total)} via ${payment.toUpperCase()}${!navigator.onLine ? " (Offline)" : ""}`,
-            target: resolvedInvoiceNo,
-          },
-          ...(prev.auditLog || [])
-        ],
+        auditLog: [auditEntry, ...(prev.auditLog || [])],
       };
     });
 
@@ -2456,15 +2621,37 @@ function POS({ db, setDb, role, notify, currentUser }) {
 
           const updatedSales = (prev.sales || []).filter(s => s.id !== saleToDelete.id && s.invoiceNo !== saleToDelete.invoiceNo);
 
+          const restockDetails = (saleToDelete.items || []).map(i => {
+            const p = (prev.products || []).find(pp => pp.id === i.productId);
+            return `${i.qty}× ${p?.name || 'Item'}`;
+          }).join(", ");
+
           const auditEntry = {
             id: uid("LOG"),
             time: `${today} ${timeStr}`,
             user: operator,
             role: currentUser?.role || "Staff",
             category: "Sale Deletion",
-            action: `Deleted sale invoice ${saleToDelete.invoiceNo} (${fmt(saleToDelete.total)})`,
-            detail: `Restored stock for ${(saleToDelete.items || []).length} item(s) — Verified via Store PIN`,
+            action: `Reversed Sale Invoice ${saleToDelete.invoiceNo} (${fmt(saleToDelete.total)})`,
+            detail: `Restored stock for ${(saleToDelete.items || []).length} items: ${restockDetails} | Verified via Store PIN`,
             target: saleToDelete.invoiceNo,
+            metadata: {
+              type: "sale_reversal",
+              invoiceNo: saleToDelete.invoiceNo,
+              total: saleToDelete.total,
+              cost: saleToDelete.cost,
+              profit: saleToDelete.profit,
+              items: (saleToDelete.items || []).map(i => {
+                const p = (prev.products || []).find(pp => pp.id === i.productId);
+                return {
+                  productId: i.productId,
+                  name: p?.name || "Product",
+                  qty: i.qty,
+                  unitPrice: i.unitPrice,
+                  lineTotal: (i.qty || 0) * (i.unitPrice || 0)
+                };
+              })
+            }
           };
 
           return {
@@ -3449,8 +3636,22 @@ function StockAdjustmentModal({ db, setDb, initialProduct, onCancel, notify, cur
           role: role === "owner" ? "Owner" : "Storekeeper",
           category: "Stock Adjustment",
           action: `Adjusted stock for ${product.name}: ${mode === "increase" ? "+" : "-"}${adjustQty} ${product.baseUnit} (${adjRef})`,
-          detail: `Reason: ${fullReason} · Prior stock: ${currentStock} → New stock: ${newStock} · Value Impact: ${fmt(valueDifference)}`,
+          detail: `Reason: ${fullReason} · Prior stock: ${currentStock} → New stock: ${newStock} ${product.baseUnit} · Valuation Impact: ${fmt(valueDifference)}`,
           target: product.name,
+          metadata: {
+            type: "adjustment",
+            ref: adjRef,
+            productId: product.id,
+            name: product.name,
+            sku: product.sku,
+            mode,
+            qty: adjustQty,
+            unit: product.baseUnit,
+            prevStock: currentStock,
+            newStock: newStock,
+            reason: fullReason,
+            valueImpact: valueDifference,
+          }
         },
         ...(prev.auditLog || [])
       ]
@@ -4473,9 +4674,23 @@ function Inventory({ db, setDb, role, notify, currentUser, onReceiveShortcut }) 
           user: operator,
           role: role === "owner" ? "Owner" : "Storekeeper",
           category: "Product",
-          action: `Added new product: ${p.name}`,
-          detail: `SKU: ${p.sku} · Initial stock: ${p.stock} ${p.baseUnit} · Cost: ${fmt(getProductUnitCost(p))}`,
+          action: `Added new product: ${p.name} (${p.sku})`,
+          detail: `SKU: ${p.sku} · Initial stock: ${p.stock} ${p.baseUnit} · Cost: ${fmt(getProductUnitCost(p))} · Sell Price: ${fmt(p.sellPrice)}`,
           target: p.name,
+          metadata: {
+            type: "product_create",
+            productId: p.id,
+            name: p.name,
+            sku: p.sku,
+            category: p.category,
+            brand: p.brand,
+            stock: p.stock,
+            baseUnit: p.baseUnit,
+            buyPrice: p.buyPrice,
+            sellPrice: p.sellPrice,
+            wholesalePrice: p.wholesalePrice,
+            contractorPrice: p.contractorPrice,
+          }
         },
         ...(prev.auditLog || [])
       ]
@@ -4510,8 +4725,16 @@ function Inventory({ db, setDb, role, notify, currentUser, onReceiveShortcut }) 
               role: role === "owner" ? "Owner" : "Storekeeper",
               category: "Product Removal",
               action: `Removed product from inventory: ${prod.name}`,
-              detail: `SKU: ${prod.sku} · Prior stock: ${prod.stock} ${prod.baseUnit} — Verified via Store PIN`,
+              detail: `SKU: ${prod.sku} · Prior stock: ${prod.stock} ${prod.baseUnit} · Valuation: ${fmt((Number(prod.stock) || 0) * (Number(prod.buyPrice) || 0))} — Verified via Store PIN`,
               target: prod.name,
+              metadata: {
+                type: "product_delete",
+                productId: prod.id,
+                name: prod.name,
+                sku: prod.sku,
+                stock: prod.stock,
+                unit: prod.baseUnit,
+              }
             },
             ...(prev.auditLog || [])
           ]
@@ -4554,8 +4777,13 @@ function Inventory({ db, setDb, role, notify, currentUser, onReceiveShortcut }) 
               role: role === "owner" ? "Owner" : "Storekeeper",
               category: "Bulk Inventory Deletion",
               action: `Wiped entire product inventory (${totalCount} products removed)`,
-              detail: `All product catalog and stock records cleared — Verified via Store PIN`,
+              detail: `All product catalog and stock records cleared (${totalUnits.toLocaleString()} units) — Verified via Store PIN`,
               target: "All Products",
+              metadata: {
+                type: "bulk_inventory_delete",
+                totalProducts: totalCount,
+                totalUnits: totalUnits,
+              }
             },
             ...(prev.auditLog || [])
           ]
@@ -4617,6 +4845,11 @@ function Inventory({ db, setDb, role, notify, currentUser, onReceiveShortcut }) 
               action: `Reset all stock quantities to 0 across ${totalCount} products`,
               detail: `Prior stock cleared (${totalUnits.toLocaleString()} units) — Verified via Store PIN`,
               target: "All Stock",
+              metadata: {
+                type: "bulk_stock_zero",
+                totalProducts: totalCount,
+                totalUnits: totalUnits,
+              }
             },
             ...(prev.auditLog || [])
           ]
@@ -5069,6 +5302,37 @@ function ProductDrawer({ product, db, setDb, canSeeCost, onDelete, onClose, noti
     const updatedConversion = Number(editForm.conversionFactor) > 0 ? Number(editForm.conversionFactor) : 1;
     const updatedUnitCost = updatedBuyPrice / updatedConversion;
 
+    const diffs = [];
+    if (Number(editForm.sellPrice) !== Number(product.sellPrice)) {
+      diffs.push({ field: "sellPrice", label: "Retail Sell Price", oldVal: product.sellPrice, newVal: Number(editForm.sellPrice) });
+    }
+    if (updatedBuyPrice !== Number(product.buyPrice)) {
+      diffs.push({ field: "buyPrice", label: "Buy Price", oldVal: product.buyPrice, newVal: updatedBuyPrice });
+    }
+    if (Number(editForm.wholesalePrice) !== Number(product.wholesalePrice)) {
+      diffs.push({ field: "wholesalePrice", label: "Wholesale Price", oldVal: product.wholesalePrice, newVal: Number(editForm.wholesalePrice) });
+    }
+    if (Number(editForm.contractorPrice) !== Number(product.contractorPrice)) {
+      diffs.push({ field: "contractorPrice", label: "Contractor Price", oldVal: product.contractorPrice, newVal: Number(editForm.contractorPrice) });
+    }
+    if (Number(editForm.minStock) !== Number(product.minStock)) {
+      diffs.push({ field: "minStock", label: "Min Stock Alert", oldVal: product.minStock, newVal: Number(editForm.minStock) });
+    }
+    if (editForm.name !== product.name) {
+      diffs.push({ field: "name", label: "Product Name", oldVal: product.name, newVal: editForm.name });
+    }
+    if (editForm.category !== product.category) {
+      diffs.push({ field: "category", label: "Category", oldVal: product.category, newVal: editForm.category });
+    }
+
+    const isPriceChange = diffs.some(d => d.field.includes("Price"));
+    const diffSummary = diffs.map(d => `${d.label}: ${typeof d.oldVal === 'number' && d.field.includes('Price') ? fmt(d.oldVal) : d.oldVal} → ${typeof d.newVal === 'number' && d.field.includes('Price') ? fmt(d.newVal) : d.newVal}`).join(" | ") || `Sell price: ${fmt(editForm.sellPrice)} · Unit Cost: ${fmt(updatedUnitCost)}`;
+
+    const logCategory = isPriceChange ? "Price Change" : "Product Update";
+    const logAction = isPriceChange 
+      ? `Updated pricing for ${editForm.name} (${product.sku})` 
+      : `Updated specifications for ${editForm.name} (${product.sku})`;
+
     setDb(prev => ({
       ...prev,
       products: prev.products.map(p => p.id === product.id ? {
@@ -5093,10 +5357,17 @@ function ProductDrawer({ product, db, setDb, canSeeCost, onDelete, onClose, noti
           time: todayISO(0) + " " + new Date().toTimeString().slice(0, 5),
           user: currentUser?.name || "Owner",
           role: role === "owner" ? "Owner" : "Storekeeper",
-          category: "Product Update",
-          action: `Updated details for ${editForm.name}`,
-          detail: `Sell price: ${fmt(editForm.sellPrice)} · Unit Cost: ${fmt(updatedUnitCost)} · Stock: ${editForm.stock} ${editForm.baseUnit}`,
+          category: logCategory,
+          action: logAction,
+          detail: diffSummary,
           target: editForm.name,
+          metadata: {
+            type: isPriceChange ? "price_change" : "product_update",
+            productId: product.id,
+            name: editForm.name,
+            sku: product.sku,
+            diffs,
+          }
         },
         ...(prev.auditLog || [])
       ]
@@ -5744,6 +6015,10 @@ function Receiving({ db, setDb, notify, currentUser, prefill, onClearPrefill }) 
         }
       }
 
+      const receivedItemsDetail = purchaseItems.map(i => {
+        return `${i.qty} ${i.unit} × ${i.productName} @ ${fmt(i.unitPrice)} (= ${fmt(i.lineTotal)})`;
+      }).join("; ");
+
       const auditEntry = {
         id: uid("LOG"),
         time: `${today} ${timeStr}`,
@@ -5751,8 +6026,26 @@ function Receiving({ db, setDb, notify, currentUser, prefill, onClearPrefill }) 
         role: "Storekeeper",
         category: "Stock Received",
         action: `Received stock delivery ${poNumber} from ${supp?.name || "Supplier"} (${paymentMode === "credit" ? "On Credit" : "Paid " + paymentMode.toUpperCase()})`,
-        detail: `${fmt(total)} · ${purchaseItems.length} item(s)`,
-        target: supp?.name || "Supplier",
+        detail: `Items: ${receivedItemsDetail} | Total: ${fmt(total)} via ${paymentMode.toUpperCase()}${invoiceRef ? ` (Ref: ${invoiceRef})` : ""}`,
+        target: poNumber,
+        metadata: {
+          type: "stock_received",
+          poNumber: poNumber,
+          supplierId: supp?.id || null,
+          supplierName: supp?.name || "Supplier",
+          total: total,
+          paymentMode: paymentMode,
+          invoiceRef: invoiceRef || null,
+          itemCount: purchaseItems.length,
+          items: purchaseItems.map(i => ({
+            productId: i.productId,
+            name: i.productName,
+            qty: i.qty,
+            unit: i.unit,
+            unitBuyPrice: i.unitPrice,
+            lineTotal: i.lineTotal,
+          }))
+        }
       };
 
       return {
@@ -5824,6 +6117,11 @@ function Receiving({ db, setDb, notify, currentUser, prefill, onClearPrefill }) 
                 action: `Deleted delivery ${poToDelete.poNumber} (${fmt(poToDelete.total)})`,
                 detail: `Deducted stock for ${(poToDelete.items || []).length} item(s) — Verified via Store PIN`,
                 target: poToDelete.poNumber,
+                metadata: {
+                  type: "delivery_voided",
+                  poNumber: poToDelete.poNumber,
+                  total: poToDelete.total,
+                }
               },
               ...(prev.auditLog || [])
             ]
@@ -5865,6 +6163,10 @@ function Receiving({ db, setDb, notify, currentUser, prefill, onClearPrefill }) 
               action: `Cleared all delivery records (${(prev.purchases || []).length} deliveries removed)`,
               detail: `Delivery ledger wiped — Verified via Store PIN`,
               target: "All Deliveries",
+              metadata: {
+                type: "bulk_delivery_delete",
+                count: (prev.purchases || []).length,
+              }
             },
             ...(prev.auditLog || [])
           ]
@@ -6174,6 +6476,9 @@ function Suppliers({ db, setDb, notify, currentUser }) {
       supplierId: supplierId,
     };
 
+    const priorBal = supplierOutstanding(db, supplierId);
+    const newBal = Math.max(0, priorBal - Number(amount));
+
     setDb(prev => ({
       ...prev,
       suppliers: (prev.suppliers || []).map(s => s.id === supplierId ? {
@@ -6189,8 +6494,18 @@ function Suppliers({ db, setDb, notify, currentUser }) {
           role: currentUser?.role || "Owner",
           category: "Supplier Payment",
           action: `Paid supplier: ${supp?.name || 'Supplier'}`,
-          detail: `${fmt(amount)} via ${paymentMethod.toUpperCase()} (logged to expenses & ledger)`,
+          detail: `Amount: ${fmt(amount)} via ${paymentMethod.toUpperCase()}${reference.trim() ? ` (Ref: ${reference.trim()})` : ""} · Prior Owed: ${fmt(priorBal)} → Remaining: ${fmt(newBal)}`,
           target: supp?.name || 'Supplier',
+          metadata: {
+            type: "supplier_payment",
+            supplierId: supplierId,
+            supplierName: supp?.name || "Supplier",
+            amount: Number(amount),
+            method: paymentMethod,
+            reference: reference.trim(),
+            prevBalance: priorBal,
+            newBalance: newBal,
+          }
         },
         ...(prev.auditLog || [])
       ],
@@ -6240,8 +6555,14 @@ function Suppliers({ db, setDb, notify, currentUser }) {
           role: currentUser?.role || "Owner",
           category: "Supplier Payment Undo",
           action: `Undid supplier payment of ${fmt(targetPayment.amount)} for ${supp?.name || 'Supplier'}`,
-          detail: `Deleted payment ID ${paymentId}`,
+          detail: `Deleted payment ID ${paymentId} · Restored payables balance`,
           target: supp?.name || 'Supplier',
+          metadata: {
+            type: "supplier_payment_undo",
+            supplierId,
+            supplierName: supp?.name || "Supplier",
+            amount: targetPayment.amount,
+          }
         },
         ...(prev.auditLog || [])
       ]
@@ -6278,6 +6599,11 @@ function Suppliers({ db, setDb, notify, currentUser }) {
               action: `Deleted supplier: ${target.name}`,
               detail: `Supplier account removed — Verified via Store PIN`,
               target: target.name,
+              metadata: {
+                type: "supplier_delete",
+                supplierId: target.id,
+                supplierName: target.name,
+              }
             },
             ...(prev.auditLog || [])
           ]
@@ -6320,6 +6646,10 @@ function Suppliers({ db, setDb, notify, currentUser }) {
               action: `Cleared all suppliers (${(prev.suppliers || []).length} accounts)`,
               detail: `All suppliers removed — Verified via Store PIN`,
               target: "All Suppliers",
+              metadata: {
+                type: "bulk_supplier_delete",
+                count: (prev.suppliers || []).length,
+              }
             },
             ...(prev.auditLog || [])
           ]
@@ -6346,6 +6676,13 @@ function Suppliers({ db, setDb, notify, currentUser }) {
           action: `Added new supplier: ${newSupp.name}`,
           detail: `Terms: ${newSupp.terms}, Phone: ${newSupp.phone || 'N/A'}`,
           target: newSupp.name,
+          metadata: {
+            type: "supplier_create",
+            supplierId: newSupp.id,
+            supplierName: newSupp.name,
+            terms: newSupp.terms,
+            phone: newSupp.phone,
+          }
         },
         ...(prev.auditLog || [])
       ]
@@ -6974,6 +7311,8 @@ function Customers({ db, setDb, notify, currentUser }) {
     const today = todayISO(0);
     const timeStr = new Date().toTimeString().slice(0, 5);
     const operator = currentUser?.name || "Owner";
+    const priorBal = customerBalance(db, customerId);
+    const newBal = Math.max(0, priorBal - Number(amount));
 
     setDb(prev => ({
       ...prev,
@@ -6988,9 +7327,19 @@ function Customers({ db, setDb, notify, currentUser }) {
           user: operator,
           role: currentUser?.role || "Staff",
           category: "Customer Payment",
-          action: `Received debt payment from ${cust?.name}`,
-          detail: `${fmt(amount)} via ${method.toUpperCase()}${reference.trim() ? ` (${reference.trim()})` : ""}`,
+          action: `Received Debt Payment from ${cust?.name}`,
+          detail: `Amount: ${fmt(amount)} via ${method.toUpperCase()}${reference.trim() ? ` (Ref: ${reference.trim()})` : ""} · Prior Debt: ${fmt(priorBal)} → Remaining Debt: ${fmt(newBal)}`,
           target: cust?.name,
+          metadata: {
+            type: "customer_payment",
+            customerId: customerId,
+            customerName: cust?.name,
+            amount: Number(amount),
+            method: method,
+            reference: reference.trim(),
+            prevBalance: priorBal,
+            newBalance: newBal,
+          }
         },
         ...(prev.auditLog || [])
       ],
@@ -7027,8 +7376,14 @@ function Customers({ db, setDb, notify, currentUser }) {
           role: currentUser?.role || "Owner",
           category: "Payment Voided",
           action: `Voided debt payment for ${cust.name}`,
-          detail: `Removed payment of ${fmt(targetPayment.amount)} — Restored debt balance`,
+          detail: `Removed payment of ${fmt(targetPayment.amount)} — Restored customer debt balance`,
           target: cust.name,
+          metadata: {
+            type: "customer_payment_undo",
+            customerId,
+            customerName: cust.name,
+            amount: targetPayment.amount,
+          }
         },
         ...(prev.auditLog || [])
       ]
@@ -7069,8 +7424,13 @@ function Customers({ db, setDb, notify, currentUser }) {
               role: currentUser?.role || "Owner",
               category: "Customer Deleted",
               action: `Deleted customer account: ${target.name}`,
-              detail: `Customer deleted — Verified via Store PIN`,
+              detail: `Customer profile removed — Verified via Store PIN`,
               target: target.name,
+              metadata: {
+                type: "customer_delete",
+                customerId: target.id,
+                customerName: target.name,
+              }
             },
             ...(prev.auditLog || [])
           ]
@@ -7112,6 +7472,10 @@ function Customers({ db, setDb, notify, currentUser }) {
               action: `Cleared all customer accounts (${(prev.customers || []).length} accounts)`,
               detail: `All customer profiles removed — Verified via Store PIN`,
               target: "All Customers",
+              metadata: {
+                type: "bulk_customer_delete",
+                count: (prev.customers || []).length,
+              }
             },
             ...(prev.auditLog || [])
           ]
@@ -7177,6 +7541,11 @@ function Customers({ db, setDb, notify, currentUser }) {
                 action: `Settled all customer debt balances (${debtors.length} accounts, ${fmt(totalOutstanding)})`,
                 detail: `Cleared all outstanding customer credit to KSh 0 — Verified via Store PIN`,
                 target: "All Customer Debts",
+                metadata: {
+                  type: "settle_all_debts",
+                  count: debtors.length,
+                  totalDebt: totalOutstanding,
+                }
               },
               ...(prev.auditLog || [])
             ]
@@ -7203,6 +7572,13 @@ function Customers({ db, setDb, notify, currentUser }) {
           action: `Registered new customer: ${newCust.name}`,
           detail: `Credit limit: ${fmt(newCust.creditLimit)}, Phone: ${newCust.phone || "N/A"}`,
           target: newCust.name,
+          metadata: {
+            type: "customer_create",
+            customerId: newCust.id,
+            customerName: newCust.name,
+            creditLimit: newCust.creditLimit,
+            phone: newCust.phone,
+          }
         },
         ...(prev.auditLog || [])
       ]
@@ -7657,6 +8033,15 @@ function Quotations({ db, setDb, notify, currentUser }) {
       employee
     };
 
+    const customerObj = (db.customers || []).find(c => c.id === q.customerId);
+    const customerName = customerObj ? customerObj.name : "Walk-in";
+    const totalQty = items.reduce((a, b) => a + (Number(b.qty) || 0), 0);
+    const itemsDetailText = items.map(i => {
+      const prod = i.product;
+      const u = prod?.baseUnit || "piece";
+      return `${i.qty} ${formatUnit(i.qty, u)} × ${prod?.name || 'Item'} @ ${fmt(i.unitPrice)} (= ${fmt(i.qty * i.unitPrice)})`;
+    }).join(", ");
+
     setDb(prev => {
       const allPrevInvSeqs = (prev.sales || []).map(s => {
         const m = String(s.invoiceNo || "").match(/\d+$/);
@@ -7684,10 +8069,31 @@ function Quotations({ db, setDb, notify, currentUser }) {
             time: todayISO(0) + " " + new Date().toTimeString().slice(0, 5),
             user: employee,
             role: currentUser?.role || "Staff",
-            category: "Quotation",
-            action: `Converted quotation ${q.number} to sale`,
-            detail: invoiceNo,
+            category: "Quotation Converted",
+            action: `Converted Quotation ${q.number} to Sale Invoice ${invoiceNo}`,
+            detail: `Items: ${itemsDetailText} | Total: ${fmt(total)} | Customer: ${customerName}`,
             target: q.number,
+            metadata: {
+              type: "quote_convert",
+              quoteNumber: q.number,
+              invoiceNo,
+              total,
+              cost,
+              profit,
+              customerId: q.customerId,
+              customerName,
+              itemCount: items.length,
+              totalQty,
+              items: items.map(i => ({
+                productId: i.productId,
+                name: i.product?.name || "Product",
+                qty: i.qty,
+                unit: i.product?.baseUnit || "piece",
+                unitPrice: i.unitPrice,
+                unitCost: i.unitCost,
+                lineTotal: i.qty * i.unitPrice,
+              }))
+            }
           },
           ...(prev.auditLog || [])
         ],
@@ -7708,6 +8114,7 @@ function Quotations({ db, setDb, notify, currentUser }) {
         const today = todayISO(0);
         const timeStr = new Date().toTimeString().slice(0, 5);
         const operator = currentUser?.name || "Staff";
+        const total = (quoteToDelete.items || []).reduce((a, i) => a + (Number(i.unitPrice) || 0) * (Number(i.qty) || 0), 0);
 
         setDb(prev => ({
           ...prev,
@@ -7719,9 +8126,14 @@ function Quotations({ db, setDb, notify, currentUser }) {
               user: operator,
               role: currentUser?.role || "Staff",
               category: "Quotation Deleted",
-              action: `Deleted quotation ${quoteToDelete.number}`,
+              action: `Deleted quotation ${quoteToDelete.number} (${fmt(total)})`,
               detail: `Quotation removed — Verified via Store PIN`,
               target: quoteToDelete.number,
+              metadata: {
+                type: "quote_delete",
+                quoteNumber: quoteToDelete.number,
+                total,
+              }
             },
             ...(prev.auditLog || [])
           ]
@@ -7760,9 +8172,13 @@ function Quotations({ db, setDb, notify, currentUser }) {
               user: operator,
               role: currentUser?.role || "Owner",
               category: "Bulk Quotation Deletion",
-              action: `Cleared all quotations (${(prev.quotations || []).length} quotations removed)`,
-              detail: `Quotations registry cleared — Verified via Store PIN`,
+              action: `Cleared all quotations (${(prev.quotations || []).length} quotes removed)`,
+              detail: `All customer quotation records wiped — Verified via Store PIN`,
               target: "All Quotations",
+              metadata: {
+                type: "bulk_quote_delete",
+                count: (prev.quotations || []).length,
+              }
             },
             ...(prev.auditLog || [])
           ]
@@ -7973,6 +8389,15 @@ function NewQuoteModal({ db, setDb, onClose, notify }) {
 
     const q = { id: uid("QT"), number: qNumber, customerId: customerId || null, date: todayISO(0), status: "draft", items };
     
+    const customerObj = (db.customers || []).find(c => c.id === customerId);
+    const customerName = customerObj ? customerObj.name : "Walk-in";
+    const totalQuoteVal = items.reduce((a, i) => a + (Number(i.unitPrice) || 0) * (Number(i.qty) || 0), 0);
+    const totalQty = items.reduce((a, i) => a + (Number(i.qty) || 0), 0);
+    const quoteItemsDetail = items.map(i => {
+      const p = db.products.find(pp => pp.id === i.productId);
+      return `${i.qty}× ${p?.name || 'Item'} @ ${fmt(i.unitPrice)}`;
+    }).join(", ");
+
     setDb(prev => {
       const allPrevSeqs = (prev.quotations || []).map(x => {
         const m = String(x.number || "").match(/\d+$/);
@@ -7983,6 +8408,38 @@ function NewQuoteModal({ db, setDb, onClose, notify }) {
         ...prev,
         quotations: [q, ...prev.quotations],
         quoteSeq: resolvedSeq,
+        auditLog: [
+          {
+            id: uid("LOG"),
+            time: `${todayISO(0)} ${new Date().toTimeString().slice(0, 5)}`,
+            user: "Staff",
+            role: "Staff",
+            category: "Quotation",
+            action: `Created Quotation ${q.number} for ${customerName} (${fmt(totalQuoteVal)})`,
+            detail: `Items: ${quoteItemsDetail} | Customer: ${customerName}`,
+            target: q.number,
+            metadata: {
+              type: "quote_create",
+              quoteNumber: q.number,
+              total: totalQuoteVal,
+              customerId: customerId || null,
+              customerName,
+              itemCount: items.length,
+              totalQty,
+              items: items.map(i => {
+                const p = db.products.find(pp => pp.id === i.productId);
+                return {
+                  productId: i.productId,
+                  name: p?.name || "Product",
+                  qty: i.qty,
+                  unitPrice: i.unitPrice,
+                  lineTotal: i.qty * i.unitPrice,
+                };
+              })
+            }
+          },
+          ...(prev.auditLog || [])
+        ]
       };
     });
 
@@ -8104,11 +8561,19 @@ function Cashbook({ db, setDb, notify, currentUser }) {
             id: uid("LOG"),
             time: `${todayStr} ${timeStr}`,
             user: operator,
-            role: "Owner",
+            role: currentUser?.role || "Owner",
             category: "Expense",
             action: `Recorded expense — ${form.category}`,
-            detail: `${fmt(amountVal)} (${form.description || "No description"})`,
+            detail: `Amount: ${fmt(amountVal)} via ${(form.payment || "cash").toUpperCase()} · ${form.description || "No description"}`,
             target: form.category,
+            metadata: {
+              type: "expense",
+              category: form.category,
+              amount: amountVal,
+              payment: form.payment || "cash",
+              description: form.description || "",
+              supplierId: form.supplierId || null,
+            }
           },
           ...(prev.auditLog || [])
         ]
@@ -8159,6 +8624,12 @@ function Cashbook({ db, setDb, notify, currentUser }) {
                 action: `Deleted expense — ${expToDelete.category} (${fmt(expToDelete.amount)})`,
                 detail: `Expense removed — Verified via Store PIN`,
                 target: expToDelete.category,
+                metadata: {
+                  type: "expense_delete",
+                  category: expToDelete.category,
+                  amount: expToDelete.amount,
+                  expenseId: expToDelete.id,
+                }
               },
               ...(prev.auditLog || [])
             ]
@@ -8181,7 +8652,7 @@ function Cashbook({ db, setDb, notify, currentUser }) {
     setPinModal({
       isOpen: true,
       title: "Authorize Clear All Expenses",
-      description: `WARNING: Enter Store Security PIN to permanently delete all ${db.expenses.length} recorded business expenses.`,
+      description: `WARNING: Enter Store Security PIN to permanently delete all ${db.expenses.length} recorded expense entries.`,
       onSuccess: () => {
         const todayStr = todayISO(0);
         const timeStr = new Date().toTimeString().slice(0, 5);
@@ -8197,9 +8668,14 @@ function Cashbook({ db, setDb, notify, currentUser }) {
               user: operator,
               role: currentUser?.role || "Owner",
               category: "Bulk Expense Deletion",
-              action: `Cleared all expenses (${(prev.expenses || []).length} records removed)`,
-              detail: `Expense ledger wiped — Verified via Store PIN`,
+              action: `Cleared all expenses (${(prev.expenses || []).length} expenses removed)`,
+              detail: `All cashbook expense entries deleted — Verified via Store PIN`,
               target: "All Expenses",
+              metadata: {
+                type: "bulk_expense_delete",
+                count: (prev.expenses || []).length,
+                totalAmount: (prev.expenses || []).reduce((a, e) => a + (Number(e.amount) || 0), 0)
+              }
             },
             ...(prev.auditLog || [])
           ]
@@ -8853,25 +9329,31 @@ function revertTransactionFromAuditLog(prevDb, logItem) {
     expenses: [...(prevDb.expenses || [])],
     sales: [...(prevDb.sales || [])],
     products: [...(prevDb.products || [])],
+    purchases: [...(prevDb.purchases || [])],
+    quotations: [...(prevDb.quotations || [])],
     auditLog: [...(prevDb.auditLog || [])],
   };
 
+  const meta = logItem.metadata || {};
   const cat = (logItem.category || "").toLowerCase();
   const act = (logItem.action || "").toLowerCase();
   const det = (logItem.detail || "").toLowerCase();
   let reversalDescription = "";
 
   // 1. Customer Debt Payment Reversal
-  if (cat.includes("customer payment") || cat.includes("debt") || act.includes("debt payment") || act.includes("payment from")) {
-    const custTargetName = (logItem.target || "").trim();
-    // Extract numerical amount from detail e.g. "KSh 25,000 via CASH" or detail string
-    const amtMatch = (logItem.detail || "").replace(/,/g, "").match(/\d+/);
-    const amountVal = amtMatch ? Number(amtMatch[0]) : null;
+  if (meta.type === "customer_payment" || cat.includes("customer payment") || cat.includes("debt") || act.includes("debt payment") || act.includes("payment from")) {
+    const custId = meta.customerId;
+    const custTargetName = (meta.customerName || logItem.target || "").trim();
+    const amountVal = meta.amount || (function() {
+      const amtMatch = (logItem.detail || "").replace(/,/g, "").match(/\d+/);
+      return amtMatch ? Number(amtMatch[0]) : null;
+    })();
     const logDate = (logItem.time || "").slice(0, 10);
 
     let foundAndReverted = false;
     updatedDb.customers = updatedDb.customers.map(c => {
-      const isTargetCust = (custTargetName && c.name.toLowerCase() === custTargetName.toLowerCase()) ||
+      const isTargetCust = (custId && c.id === custId) ||
+                           (custTargetName && c.name.toLowerCase() === custTargetName.toLowerCase()) ||
                            (custTargetName && c.id === custTargetName) ||
                            (act.includes(c.name.toLowerCase()));
 
@@ -8879,7 +9361,6 @@ function revertTransactionFromAuditLog(prevDb, logItem) {
         const paymentsList = [...(c.payments || [])];
         let removeIdx = -1;
 
-        // Search for matching payment starting from latest
         for (let i = paymentsList.length - 1; i >= 0; i--) {
           const p = paymentsList[i];
           const pAmt = Number(p.amount) || 0;
@@ -8910,15 +9391,19 @@ function revertTransactionFromAuditLog(prevDb, logItem) {
   }
 
   // 2. Supplier Payment Reversal
-  else if (cat.includes("supplier payment") || act.includes("paid supplier")) {
-    const suppTargetName = (logItem.target || "").trim();
-    const amtMatch = (logItem.detail || "").replace(/,/g, "").match(/\d+/);
-    const amountVal = amtMatch ? Number(amtMatch[0]) : null;
+  else if (meta.type === "supplier_payment" || cat.includes("supplier payment") || act.includes("paid supplier")) {
+    const suppId = meta.supplierId;
+    const suppTargetName = (meta.supplierName || logItem.target || "").trim();
+    const amountVal = meta.amount || (function() {
+      const amtMatch = (logItem.detail || "").replace(/,/g, "").match(/\d+/);
+      return amtMatch ? Number(amtMatch[0]) : null;
+    })();
     let linkedExpId = null;
 
     let foundAndReverted = false;
     updatedDb.suppliers = updatedDb.suppliers.map(s => {
-      const isTargetSupp = (suppTargetName && s.name.toLowerCase() === suppTargetName.toLowerCase()) ||
+      const isTargetSupp = (suppId && s.id === suppId) ||
+                           (suppTargetName && s.name.toLowerCase() === suppTargetName.toLowerCase()) ||
                            (suppTargetName && s.id === suppTargetName) ||
                            (act.includes(s.name.toLowerCase()));
 
@@ -8948,7 +9433,6 @@ function revertTransactionFromAuditLog(prevDb, logItem) {
       return s;
     });
 
-    // Remove matching expense
     if (linkedExpId || amountVal) {
       let expRemoved = false;
       updatedDb.expenses = updatedDb.expenses.filter(e => {
@@ -8968,10 +9452,12 @@ function revertTransactionFromAuditLog(prevDb, logItem) {
   }
 
   // 3. General Expense Reversal
-  else if (cat === "expense" || act.includes("recorded expense")) {
-    const amtMatch = (logItem.detail || "").replace(/,/g, "").match(/\d+/);
-    const amountVal = amtMatch ? Number(amtMatch[0]) : null;
-    const targetCategory = (logItem.target || "").trim();
+  else if (meta.type === "expense" || cat === "expense" || act.includes("recorded expense")) {
+    const amountVal = meta.amount || (function() {
+      const amtMatch = (logItem.detail || "").replace(/,/g, "").match(/\d+/);
+      return amtMatch ? Number(amtMatch[0]) : null;
+    })();
+    const targetCategory = meta.category || (logItem.target || "").trim();
 
     let expRemoved = false;
     updatedDb.expenses = updatedDb.expenses.filter(e => {
@@ -8988,14 +9474,55 @@ function revertTransactionFromAuditLog(prevDb, logItem) {
     });
   }
 
-  // 4. Sale / Invoice Reversal
-  else if (cat.includes("sale") || act.includes("sold") || act.includes("credit sale")) {
-    const invMatch = (logItem.detail || logItem.action || "").match(/INV-[A-Za-z0-9-]+/i);
-    if (invMatch) {
-      const invNo = invMatch[0];
+  // 4. Stock Received / Delivery PO Reversal
+  else if (meta.type === "stock_received" || meta.poNumber || cat.includes("stock received")) {
+    const poNum = meta.poNumber || (function() {
+      const m = (logItem.action + " " + logItem.detail + " " + logItem.target).match(/PO-\d+/i);
+      return m ? m[0] : null;
+    })();
+    if (poNum) {
+      const poToCancel = updatedDb.purchases.find(p => p.poNumber === poNum || p.id === poNum);
+      if (poToCancel) {
+        updatedDb.products = updatedDb.products.map(p => {
+          const item = (poToCancel.items || []).find(it => it.productId === p.id);
+          if (!item) return p;
+          const factor = Number(p.conversionFactor) || 1;
+          const deductQty = (Number(item.qty) || 0) * factor;
+          const restoredStock = Math.max(0, (Number(p.stock) || 0) - deductQty);
+          return {
+            ...p,
+            stock: restoredStock,
+            history: [
+              ...(p.history || []),
+              {
+                id: uid("H"),
+                date: todayISO(0),
+                time: new Date().toTimeString().slice(0, 5),
+                action: "Delivery Reversal",
+                ref: `REV-${poNum}`,
+                qty: -deductQty,
+                balance: restoredStock,
+                user: "Owner",
+                reason: `Audit log removal — Delivery ${poNum} voided`,
+              }
+            ]
+          };
+        });
+        updatedDb.purchases = updatedDb.purchases.filter(p => p.poNumber !== poNum && p.id !== poNum);
+        reversalDescription = `Voided delivery ${poNum} (${fmt(poToCancel.total)}) and deducted delivered items from stock.`;
+      }
+    }
+  }
+
+  // 5. Sale / Invoice Reversal
+  else if (meta.type === "sale" || meta.type === "credit_sale" || meta.invoiceNo || cat.includes("sale") || act.includes("sold") || act.includes("credit sale")) {
+    const invNo = meta.invoiceNo || (function() {
+      const invMatch = (logItem.detail || logItem.action || logItem.target || "").match(/INV-[A-Za-z0-9-]+/i);
+      return invMatch ? invMatch[0] : null;
+    })();
+    if (invNo) {
       const saleToCancel = updatedDb.sales.find(s => s.invoiceNo === invNo || s.id === invNo);
       if (saleToCancel) {
-        // Restock products
         updatedDb.products = updatedDb.products.map(p => {
           const item = (saleToCancel.items || []).find(it => it.productId === p.id);
           if (!item) return p;
@@ -9031,18 +9558,24 @@ function revertTransactionFromAuditLog(prevDb, logItem) {
   return { updatedDb, reversalDescription };
 }
 
-/* ================= MODERN INTERACTIVE AUDIT LOG ================= */
+/* ================= MODERN ENTERPRISE AUDIT LOG & COMPLIANCE LEDGER ================= */
 function AuditLog({ db, setDb, notify, currentUser }) {
   const [query, setQuery] = useState("");
   const [user, setUser] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [periodFilter, setPeriodFilter] = useState("all"); // "all" | "today" | "7days" | "30days" | "thisMonth"
+  const [paymentFilter, setPaymentFilter] = useState("all"); // "all" | "cash" | "mpesa" | "bank" | "credit" | "split"
   const [selectedLog, setSelectedLog] = useState(null);
+  const [rawJsonOpen, setRawJsonOpen] = useState(false);
+  const [copiedJson, setCopiedJson] = useState(false);
   const [pinModal, setPinModal] = useState({
     isOpen: false,
     title: "",
     description: "",
     onSuccess: () => {},
   });
+
+  const role = currentUser?.role || "owner";
 
   const users = useMemo(() => {
     const set = new Set((db.auditLog || []).map(a => a.user).filter(Boolean));
@@ -9054,59 +9587,158 @@ function AuditLog({ db, setDb, notify, currentUser }) {
     return list.sort((a, b) => (b.time || "").localeCompare(a.time || ""));
   }, [db.auditLog]);
 
-  // Category counts for quick filter tabs
-  const counts = useMemo(() => {
-    const c = { all: rawLogs.length, sales: 0, stock: 0, payments: 0, prices: 0, security: 0 };
+  // KPI calculations
+  const kpis = useMemo(() => {
+    let salesCount = 0;
+    let salesVolume = 0;
+    let creditCount = 0;
+    let creditVolume = 0;
+    let stockCount = 0;
+    let securityCount = 0;
+
     rawLogs.forEach(a => {
       const cat = (a.category || "").toLowerCase();
-      if (cat.includes("sale")) c.sales++;
-      else if (cat.includes("stock") || cat.includes("received") || cat.includes("adjustment") || cat.includes("product")) c.stock++;
-      else if (cat.includes("payment") || cat.includes("expense") || cat.includes("debt")) c.payments++;
+      const meta = a.metadata || {};
+      const isCredit = cat.includes("credit sale") || meta.isCredit || meta.type === "credit_sale";
+      const isSale = cat.includes("sale") || meta.type === "sale" || meta.type === "credit_sale";
+
+      if (isCredit) {
+        creditCount++;
+        creditVolume += Number(meta.total) || 0;
+      } else if (isSale) {
+        salesCount++;
+        salesVolume += Number(meta.total) || 0;
+      }
+
+      if (cat.includes("stock") || cat.includes("received") || cat.includes("adjustment") || cat.includes("product") || cat.includes("delivery") || meta.type === "stock_received" || meta.type === "adjustment") {
+        stockCount++;
+      }
+
+      if (cat.includes("security") || cat.includes("login") || cat.includes("password") || cat.includes("pin") || cat.includes("profile") || meta.type === "login" || meta.type === "logout") {
+        securityCount++;
+      }
+    });
+
+    return {
+      total: rawLogs.length,
+      salesCount,
+      salesVolume,
+      creditCount,
+      creditVolume,
+      stockCount,
+      securityCount,
+    };
+  }, [rawLogs]);
+
+  // Category counts for filter tabs
+  const counts = useMemo(() => {
+    const c = { all: rawLogs.length, sales: 0, credit: 0, stock: 0, payments: 0, prices: 0, quotations: 0, expenses: 0, security: 0 };
+    rawLogs.forEach(a => {
+      const cat = (a.category || "").toLowerCase();
+      const meta = a.metadata || {};
+      if (cat.includes("credit sale") || meta.isCredit || meta.type === "credit_sale") c.credit++;
+      else if (cat.includes("sale") || meta.type === "sale") c.sales++;
+      else if (cat.includes("stock") || cat.includes("received") || cat.includes("adjustment") || cat.includes("product") || cat.includes("delivery")) c.stock++;
+      else if (cat.includes("supplier payment") || cat.includes("customer payment") || cat.includes("debt") || cat.includes("payment")) c.payments++;
       else if (cat.includes("price")) c.prices++;
+      else if (cat.includes("quotation")) c.quotations++;
+      else if (cat.includes("expense")) c.expenses++;
       else if (cat.includes("security") || cat.includes("login") || cat.includes("password") || cat.includes("pin") || cat.includes("profile")) c.security++;
     });
     return c;
   }, [rawLogs]);
 
+  const todayStr = todayISO(0);
+  const sevenDaysAgo = todayISO(-7);
+  const thirtyDaysAgo = todayISO(-30);
+  const startOfMonth = todayStr.slice(0, 7) + "-01";
+
   const q = query.trim().toLowerCase();
   const filtered = rawLogs.filter(a => {
     if (user !== "all" && a.user !== user) return false;
     
+    // Period filter
+    const logDate = (a.time || "").slice(0, 10);
+    if (periodFilter === "today" && logDate !== todayStr) return false;
+    if (periodFilter === "7days" && logDate < sevenDaysAgo) return false;
+    if (periodFilter === "30days" && logDate < thirtyDaysAgo) return false;
+    if (periodFilter === "thisMonth" && logDate < startOfMonth) return false;
+
+    // Payment method filter
+    if (paymentFilter !== "all") {
+      const meta = a.metadata || {};
+      const payMode = (meta.payment || meta.paymentMode || meta.method || "").toLowerCase();
+      const detText = (a.detail || "").toLowerCase();
+      if (!payMode.includes(paymentFilter) && !detText.includes(paymentFilter)) return false;
+    }
+
+    // Category tabs filter
     if (categoryFilter !== "all") {
       const cat = (a.category || "").toLowerCase();
-      if (categoryFilter === "sales" && !cat.includes("sale")) return false;
-      if (categoryFilter === "stock" && !cat.includes("stock") && !cat.includes("received") && !cat.includes("adjustment") && !cat.includes("product")) return false;
-      if (categoryFilter === "payments" && !cat.includes("payment") && !cat.includes("expense") && !cat.includes("debt")) return false;
-      if (categoryFilter === "prices" && !cat.includes("price")) return false;
+      const meta = a.metadata || {};
+      if (categoryFilter === "sales" && (cat.includes("credit") || meta.isCredit || (!cat.includes("sale") && meta.type !== "sale"))) return false;
+      if (categoryFilter === "credit" && !cat.includes("credit sale") && !meta.isCredit && meta.type !== "credit_sale") return false;
+      if (categoryFilter === "stock" && !cat.includes("stock") && !cat.includes("received") && !cat.includes("adjustment") && !cat.includes("product") && !cat.includes("delivery")) return false;
+      if (categoryFilter === "payments" && !cat.includes("supplier payment") && !cat.includes("customer payment") && !cat.includes("debt") && !cat.includes("payment")) return false;
+      if (categoryFilter === "prices" && !cat.includes("price") && meta.type !== "price_change") return false;
+      if (categoryFilter === "quotations" && !cat.includes("quotation")) return false;
+      if (categoryFilter === "expenses" && !cat.includes("expense")) return false;
       if (categoryFilter === "security" && !cat.includes("security") && !cat.includes("login") && !cat.includes("password") && !cat.includes("pin") && !cat.includes("profile")) return false;
     }
 
     if (!q) return true;
+
+    // Search deep within items array in metadata as well
+    const metaItemsText = (a.metadata?.items || []).map(i => `${i.name || ''} ${i.sku || ''} ${i.qty || ''} ${i.unitPrice || ''}`).join(" ").toLowerCase();
+
     return (
       (a.action || "").toLowerCase().includes(q) ||
       (a.user || "").toLowerCase().includes(q) ||
       (a.detail || "").toLowerCase().includes(q) ||
       (a.time || "").toLowerCase().includes(q) ||
       (a.category || "").toLowerCase().includes(q) ||
-      (a.target || "").toLowerCase().includes(q)
+      (a.target || "").toLowerCase().includes(q) ||
+      metaItemsText.includes(q)
     );
   });
 
   function downloadPDF() {
-    exportAuditLogPDF({ logs: filtered, userFilter: user, query });
+    exportAuditLogPDF({ logs: filtered, userFilter: user, query, periodFilter, paymentFilter });
     notify("success", "Audit Log PDF Exported", `${filtered.length} log entries exported.`);
   }
 
-  function getCategoryPill(category) {
+  function downloadCSV() {
+    exportAuditLogCSV({ logs: filtered });
+    notify("success", "Audit Ledger CSV Exported", `${filtered.length} log records downloaded.`);
+  }
+
+  function getCategoryPill(category, metadata) {
     const cat = (category || "").toLowerCase();
-    if (cat.includes("credit sale")) return <Pill tone="purple">CREDIT SALE</Pill>;
-    if (cat.includes("sale")) return <Pill tone="green">SALE</Pill>;
-    if (cat.includes("stock") || cat.includes("received") || cat.includes("adjustment")) return <Pill tone="steel">STOCK</Pill>;
-    if (cat.includes("price")) return <Pill tone="amber">PRICE</Pill>;
-    if (cat.includes("expense") || cat.includes("payment") || cat.includes("debt")) return <Pill tone="red">PAYMENT</Pill>;
-    if (cat.includes("security") || cat.includes("password") || cat.includes("pin")) return <Pill tone="rust">SECURITY</Pill>;
-    if (cat.includes("quotation")) return <Pill tone="purple">QUOTE</Pill>;
+    const meta = metadata || {};
+    if (cat.includes("credit sale") || meta.isCredit || meta.type === "credit_sale") return <Pill tone="purple">CREDIT SALE</Pill>;
+    if (cat.includes("split sale") || meta.payment === "split") return <Pill tone="blue">SPLIT SALE</Pill>;
+    if (cat.includes("sale") || meta.type === "sale") return <Pill tone="green">CASH SALE</Pill>;
+    if (cat.includes("stock received") || meta.type === "stock_received") return <Pill tone="steel">STOCK RECEIVED</Pill>;
+    if (cat.includes("adjustment") || meta.type === "adjustment") return <Pill tone="amber">STOCK ADJ</Pill>;
+    if (cat.includes("price") || meta.type === "price_change") return <Pill tone="amber">PRICE CHANGE</Pill>;
+    if (cat.includes("customer payment") || meta.type === "customer_payment") return <Pill tone="green">DEBT PAYMENT</Pill>;
+    if (cat.includes("supplier payment") || meta.type === "supplier_payment") return <Pill tone="blue">SUPPLIER PAY</Pill>;
+    if (cat.includes("expense") || meta.type === "expense") return <Pill tone="red">EXPENSE</Pill>;
+    if (cat.includes("quotation") || meta.type === "quote_create" || meta.type === "quote_convert") return <Pill tone="purple">QUOTATION</Pill>;
+    if (cat.includes("security") || meta.type === "login" || meta.type === "logout") return <Pill tone="rust">SECURITY</Pill>;
+    if (cat.includes("product")) return <Pill tone="steel">PRODUCT</Pill>;
     return <Pill tone="ink">AUDIT</Pill>;
+  }
+
+  function getPaymentPill(payment) {
+    if (!payment) return null;
+    const p = String(payment).toLowerCase();
+    if (p === "cash") return <span style={{ background: "rgba(23, 114, 69, 0.12)", color: "var(--green)", padding: "2px 6px", borderRadius: 4, fontSize: 11, fontWeight: 700 }}>CASH</span>;
+    if (p === "mpesa") return <span style={{ background: "rgba(0, 168, 89, 0.15)", color: "#00A859", padding: "2px 6px", borderRadius: 4, fontSize: 11, fontWeight: 700 }}>M-PESA</span>;
+    if (p === "credit") return <span style={{ background: "rgba(107, 70, 193, 0.15)", color: "#805AD5", padding: "2px 6px", borderRadius: 4, fontSize: 11, fontWeight: 700 }}>CREDIT</span>;
+    if (p === "split") return <span style={{ background: "rgba(43, 108, 176, 0.15)", color: "#3182CE", padding: "2px 6px", borderRadius: 4, fontSize: 11, fontWeight: 700 }}>SPLIT</span>;
+    if (p === "bank") return <span style={{ background: "rgba(51, 84, 107, 0.15)", color: "#33546B", padding: "2px 6px", borderRadius: 4, fontSize: 11, fontWeight: 700 }}>BANK</span>;
+    return <span style={{ background: "var(--surface-hover)", color: "var(--ink-soft)", padding: "2px 6px", borderRadius: 4, fontSize: 11, fontWeight: 600 }}>{payment.toUpperCase()}</span>;
   }
 
   /* ---------- Delete Single Audit Log with Store PIN & Revert Linked Impact ---------- */
@@ -9150,6 +9782,17 @@ function AuditLog({ db, setDb, notify, currentUser }) {
     });
   }
 
+  function handleCopyJson(data) {
+    try {
+      navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+      setCopiedJson(true);
+      setTimeout(() => setCopiedJson(false), 2000);
+      notify("success", "JSON Copied", "Audit event metadata copied to clipboard.");
+    } catch (e) {
+      notify("info", "Copy Error", "Failed to copy JSON to clipboard.");
+    }
+  }
+
   return (
     <div>
       <PinVerificationModal
@@ -9161,150 +9804,330 @@ function AuditLog({ db, setDb, notify, currentUser }) {
         db={db}
       />
 
+      {/* Top Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 12, flexWrap: "wrap" }}>
         <div>
-          <div className="disp" style={{ fontSize: 26, fontWeight: 700 }}>System Audit Log</div>
-          <div style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>Real-time traceability of all retail sales, credit invoices, stock movements, and financial ledger events.</div>
+          <div className="disp" style={{ fontSize: 26, fontWeight: 700, display: "flex", alignItems: "center", gap: 10 }}>
+            <Layers size={26} color="var(--rust)" />
+            <span>Enterprise Audit Log & Traceability Ledger</span>
+          </div>
+          <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2 }}>
+            Real-time forensic tracking of every sale item, credit transaction, stock delivery, price adjustment, and security authorization.
+          </div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <button
             type="button"
             className="hf-btn hf-btn-ghost"
-            style={{ color: "var(--red)", borderColor: "var(--red)" }}
+            style={{ color: "var(--red)", borderColor: "var(--red-tint)" }}
             onClick={handleClearAllLogs}
             title="Wipe audit log history (Requires PIN)"
           >
             <Trash2 size={14} /> Clear All Logs
           </button>
-          <button className="hf-btn hf-btn-ghost" onClick={downloadPDF}>
-            <Download size={15} /> Download PDF
+          <button className="hf-btn hf-btn-ghost" onClick={downloadCSV} title="Export full tabular CSV audit ledger">
+            <FileSpreadsheet size={15} color="var(--green)" /> Export CSV
           </button>
-          <div style={{ position: "relative" }}>
-            <Search size={14} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--ink-soft)", pointerEvents: "none" }} />
-            <input className="hf-input hf-input-with-left-icon" style={{ paddingLeft: 38, width: 220 }} placeholder="Search action, user, amount…" value={query} onChange={e => setQuery(e.target.value)} />
-          </div>
-          <select className="hf-input" style={{ width: 140 }} value={user} onChange={e => setUser(e.target.value)}>
-            {users.map(u => <option key={u} value={u}>{u === "all" ? "All Staff" : u}</option>)}
-          </select>
+          <button className="hf-btn hf-btn-ghost" onClick={downloadPDF} title="Export landscape PDF audit report">
+            <Download size={15} color="var(--rust)" /> Download PDF
+          </button>
         </div>
       </div>
 
-      {/* Category filter pills / tabs */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
-        <button
-          type="button"
-          className={`hf-btn ${categoryFilter === "all" ? "hf-btn-primary" : "hf-btn-ghost"}`}
-          style={{ padding: "6px 12px", fontSize: 12, borderRadius: 20 }}
-          onClick={() => setCategoryFilter("all")}
-        >
-          All Activity ({counts.all})
-        </button>
-        <button
-          type="button"
-          className={`hf-btn ${categoryFilter === "sales" ? "hf-btn-primary" : "hf-btn-ghost"}`}
-          style={{ padding: "6px 12px", fontSize: 12, borderRadius: 20 }}
-          onClick={() => setCategoryFilter("sales")}
-        >
-          🛒 Sales ({counts.sales})
-        </button>
-        <button
-          type="button"
-          className={`hf-btn ${categoryFilter === "stock" ? "hf-btn-primary" : "hf-btn-ghost"}`}
-          style={{ padding: "6px 12px", fontSize: 12, borderRadius: 20 }}
-          onClick={() => setCategoryFilter("stock")}
-        >
-          📦 Stock & Receiving ({counts.stock})
-        </button>
-        <button
-          type="button"
-          className={`hf-btn ${categoryFilter === "payments" ? "hf-btn-primary" : "hf-btn-ghost"}`}
-          style={{ padding: "6px 12px", fontSize: 12, borderRadius: 20 }}
-          onClick={() => setCategoryFilter("payments")}
-        >
-          💳 Payments & Debt ({counts.payments})
-        </button>
-        <button
-          type="button"
-          className={`hf-btn ${categoryFilter === "prices" ? "hf-btn-primary" : "hf-btn-ghost"}`}
-          style={{ padding: "6px 12px", fontSize: 12, borderRadius: 20 }}
-          onClick={() => setCategoryFilter("prices")}
-        >
-          🏷️ Price Changes ({counts.prices})
-        </button>
-        <button
-          type="button"
-          className={`hf-btn ${categoryFilter === "security" ? "hf-btn-primary" : "hf-btn-ghost"}`}
-          style={{ padding: "6px 12px", fontSize: 12, borderRadius: 20 }}
-          onClick={() => setCategoryFilter("security")}
-        >
-          🔒 Security & Auth ({counts.security})
-        </button>
+      {/* Top KPI Cards Row */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 16 }}>
+        <div className="hf-card" style={{ padding: "14px 16px" }}>
+          <div className="hf-kpi-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <History size={15} color="var(--steel)" /> Total Events
+          </div>
+          <div className="hf-kpi-val" style={{ fontSize: 22 }}>{kpis.total.toLocaleString()}</div>
+          <div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Recorded audit trail</div>
+        </div>
+        <div className="hf-card" style={{ padding: "14px 16px" }}>
+          <div className="hf-kpi-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <ShoppingCart size={15} color="var(--green)" /> Cash Sales Logged
+          </div>
+          <div className="hf-kpi-val text-profit" style={{ fontSize: 22 }}>{fmt(kpis.salesVolume)}</div>
+          <div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>{kpis.salesCount} cash/split transactions</div>
+        </div>
+        <div className="hf-card" style={{ padding: "14px 16px" }}>
+          <div className="hf-kpi-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <CreditCard size={15} color="#805AD5" /> Credit Volume Logged
+          </div>
+          <div className="hf-kpi-val" style={{ fontSize: 22, color: "#805AD5" }}>{fmt(kpis.creditVolume)}</div>
+          <div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>{kpis.creditCount} credit invoices issued</div>
+        </div>
+        <div className="hf-card" style={{ padding: "14px 16px" }}>
+          <div className="hf-kpi-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <Package size={15} color="var(--steel)" /> Stock Movements
+          </div>
+          <div className="hf-kpi-val" style={{ fontSize: 22 }}>{kpis.stockCount}</div>
+          <div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Deliveries, ADJs & changes</div>
+        </div>
+        <div className="hf-card" style={{ padding: "14px 16px" }}>
+          <div className="hf-kpi-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <ShieldCheck size={15} color="var(--rust)" /> Security & Auth
+          </div>
+          <div className="hf-kpi-val" style={{ fontSize: 22 }}>{kpis.securityCount}</div>
+          <div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Logins, PINs & credentials</div>
+        </div>
       </div>
 
-      <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 8, display: "flex", justifyContent: "space-between" }}>
+      {/* Category Filter Tabs */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+        {[
+          { key: "all", label: `All Events (${counts.all})` },
+          { key: "sales", label: `🛒 Cash Sales (${counts.sales})` },
+          { key: "credit", label: `💳 Credit Sales (${counts.credit})` },
+          { key: "stock", label: `📦 Stock & Receiving (${counts.stock})` },
+          { key: "payments", label: `💰 Debt & Payments (${counts.payments})` },
+          { key: "prices", label: `🏷️ Price Changes (${counts.prices})` },
+          { key: "quotations", label: `📑 Quotes (${counts.quotations})` },
+          { key: "expenses", label: `💸 Expenses (${counts.expenses})` },
+          { key: "security", label: `🔒 Security (${counts.security})` },
+        ].map(t => (
+          <button
+            key={t.key}
+            type="button"
+            className={`hf-btn ${categoryFilter === t.key ? "hf-btn-primary" : "hf-btn-ghost"}`}
+            style={{ padding: "6px 12px", fontSize: 12, borderRadius: 20 }}
+            onClick={() => setCategoryFilter(t.key)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Advanced Filter Bar */}
+      <div className="hf-card" style={{ padding: "12px 14px", marginBottom: 14, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ position: "relative", flex: "1 1 240px", minWidth: 200 }}>
+          <Search size={14} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--ink-soft)", pointerEvents: "none" }} />
+          <input
+            className="hf-input hf-input-with-left-icon"
+            style={{ paddingLeft: 36, width: "100%" }}
+            placeholder="Search action, product item, invoice #, customer, amount…"
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+          />
+        </div>
+
+        <select className="hf-input" style={{ width: 140 }} value={user} onChange={e => setUser(e.target.value)}>
+          {users.map(u => <option key={u} value={u}>{u === "all" ? "All Operators" : u}</option>)}
+        </select>
+
+        <select className="hf-input" style={{ width: 140 }} value={periodFilter} onChange={e => setPeriodFilter(e.target.value)}>
+          <option value="all">All Dates</option>
+          <option value="today">Today Only</option>
+          <option value="7days">Last 7 Days</option>
+          <option value="30days">Last 30 Days</option>
+          <option value="thisMonth">This Month</option>
+        </select>
+
+        <select className="hf-input" style={{ width: 140 }} value={paymentFilter} onChange={e => setPaymentFilter(e.target.value)}>
+          <option value="all">All Pay Modes</option>
+          <option value="cash">Cash Only</option>
+          <option value="mpesa">M-Pesa Only</option>
+          <option value="bank">Bank Only</option>
+          <option value="credit">Credit Only</option>
+          <option value="split">Split Only</option>
+        </select>
+
+        {(query || user !== "all" || periodFilter !== "all" || paymentFilter !== "all" || categoryFilter !== "all") && (
+          <button
+            type="button"
+            className="hf-btn hf-btn-ghost"
+            style={{ fontSize: 12, padding: "6px 10px" }}
+            onClick={() => {
+              setQuery("");
+              setUser("all");
+              setPeriodFilter("all");
+              setPaymentFilter("all");
+              setCategoryFilter("all");
+            }}
+          >
+            Reset Filters
+          </button>
+        )}
+      </div>
+
+      <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span>Showing <b>{filtered.length}</b> of <b>{rawLogs.length}</b> events in real-time</span>
-        <span style={{ fontStyle: "italic" }}>Tip: Click on any log row to inspect detailed transaction metadata.</span>
+        <span style={{ fontStyle: "italic" }}>💡 Click any row to inspect complete itemized receipt, cost margins, and raw forensic JSON.</span>
       </div>
 
+      {/* Main Audit Trail Table */}
       <div className="hf-card" style={{ overflowX: "auto" }}>
         <table className="hf-table">
           <thead>
             <tr>
-              <th style={{ width: 140 }}>Timestamp</th>
-              <th style={{ width: 110 }}>Actor / User</th>
-              <th style={{ width: 100 }}>Type</th>
-              <th>Action Description</th>
-              <th>Reference / Amount</th>
+              <th style={{ width: 135 }}>Timestamp</th>
+              <th style={{ width: 120 }}>Operator</th>
+              <th style={{ width: 110 }}>Type</th>
+              <th>Action & Itemized Products</th>
+              <th style={{ width: 190 }}>Ledger / Payment Impact</th>
               <th style={{ width: 80, textAlign: "right" }}></th>
             </tr>
           </thead>
           <tbody>
-            {filtered.map((a, i) => (
-              <tr
-                key={a.id || i}
-                onClick={() => setSelectedLog(a)}
-                style={{ cursor: "pointer" }}
-                title="Click to view full log details"
-              >
-                <td>
-                  <div className="mono" style={{ fontSize: 12, fontWeight: 600 }}>{a.time}</div>
-                </td>
-                <td>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <div style={{
-                      width: 22, height: 22, borderRadius: "50%",
-                      background: a.user === "Owner" ? "var(--rust)" : "#33546B",
-                      color: "#fff", fontSize: 10.5, fontWeight: 700,
-                      display: "flex", alignItems: "center", justifyContent: "center"
-                    }}>
-                      {a.user?.charAt(0) || "U"}
+            {filtered.map((a, i) => {
+              const meta = a.metadata || {};
+              const items = meta.items || [];
+              const diffs = meta.diffs || [];
+
+              return (
+                <tr
+                  key={a.id || i}
+                  onClick={() => setSelectedLog(a)}
+                  style={{ cursor: "pointer" }}
+                  title="Click to inspect detailed transaction record"
+                >
+                  <td>
+                    <div className="mono" style={{ fontSize: 12, fontWeight: 600 }}>{a.time}</div>
+                  </td>
+                  <td>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <div style={{
+                        width: 24, height: 24, borderRadius: "50%",
+                        background: a.user === "Owner" ? "var(--rust)" : (a.user === "Mary" ? "var(--steel)" : "#33546B"),
+                        color: "#fff", fontSize: 11, fontWeight: 700,
+                        display: "flex", alignItems: "center", justifyContent: "center"
+                      }}>
+                        {a.user?.charAt(0) || "U"}
+                      </div>
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: 12.5 }}>{a.user}</div>
+                        <div style={{ fontSize: 10.5, color: "var(--ink-soft)" }}>{a.role || "Staff"}</div>
+                      </div>
                     </div>
-                    <span style={{ fontWeight: 600 }}>{a.user}</span>
-                  </div>
-                </td>
-                <td>{getCategoryPill(a.category)}</td>
-                <td style={{ fontWeight: 500 }}>{a.action}</td>
-                <td className="mono" style={{ color: "var(--ink)" }}>{a.detail || "—"}</td>
-                <td style={{ textAlign: "right" }} onClick={e => e.stopPropagation()}>
-                  <div style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
-                    <button
-                      type="button"
-                      className="hf-btn hf-btn-ghost"
-                      style={{ padding: "4px 6px", color: "var(--red)" }}
-                      onClick={() => handleDeleteSingleLog(a)}
-                      title="Delete log record (Requires PIN)"
-                    >
-                      <Trash2 size={13} />
-                    </button>
-                    <Eye size={15} color="var(--ink-soft)" />
-                  </div>
-                </td>
-              </tr>
-            ))}
+                  </td>
+                  <td>{getCategoryPill(a.category, meta)}</td>
+                  <td>
+                    <div style={{ fontWeight: 600, fontSize: 13, color: "var(--ink)" }}>{a.action}</div>
+                    
+                    {/* Item Chips / Pills */}
+                    {items.length > 0 ? (
+                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
+                        {items.slice(0, 3).map((it, idx) => (
+                          <span
+                            key={idx}
+                            style={{
+                              background: "var(--surface-hover)",
+                              border: "1px solid var(--line)",
+                              borderRadius: 4,
+                              padding: "2px 6px",
+                              fontSize: 11.5,
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 4
+                            }}
+                          >
+                            <span style={{ fontWeight: 700, color: "var(--rust)" }}>{it.qty}×</span>
+                            <span>{it.name}</span>
+                            {it.unitPrice > 0 && <span className="mono" style={{ color: "var(--ink-soft)" }}>@{fmt(it.unitPrice)}</span>}
+                          </span>
+                        ))}
+                        {items.length > 3 && (
+                          <span style={{ fontSize: 11, color: "var(--ink-soft)", alignSelf: "center" }}>
+                            +{items.length - 3} more
+                          </span>
+                        )}
+                      </div>
+                    ) : diffs.length > 0 ? (
+                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
+                        {diffs.map((d, idx) => (
+                          <span key={idx} style={{ background: "var(--amber-tint)", border: "1px solid var(--amber)", borderRadius: 4, padding: "2px 6px", fontSize: 11, color: "var(--amber)", fontWeight: 600 }}>
+                            {d.label}: {typeof d.oldVal === 'number' && d.field.includes('Price') ? fmt(d.oldVal) : d.oldVal} → {typeof d.newVal === 'number' && d.field.includes('Price') ? fmt(d.newVal) : d.newVal}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 2 }}>
+                        {a.detail || "—"}
+                      </div>
+                    )}
+                  </td>
+                  <td>
+                    {meta.total !== undefined ? (
+                      <div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <span className={`mono ${meta.isCredit ? 'text-loss' : 'text-profit'}`} style={{ fontWeight: 700, fontSize: 13.5 }}>
+                            {fmt(meta.total)}
+                          </span>
+                          {getPaymentPill(meta.payment || meta.paymentMode)}
+                        </div>
+                        {meta.customerName && (
+                          <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginTop: 2 }}>
+                            Cust: <b>{meta.customerName}</b>
+                          </div>
+                        )}
+                        {meta.supplierName && (
+                          <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginTop: 2 }}>
+                            Supp: <b>{meta.supplierName}</b>
+                          </div>
+                        )}
+                      </div>
+                    ) : meta.amount !== undefined ? (
+                      <div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <span className="mono text-profit" style={{ fontWeight: 700, fontSize: 13.5 }}>
+                            {fmt(meta.amount)}
+                          </span>
+                          {getPaymentPill(meta.method || meta.payment)}
+                        </div>
+                        {meta.customerName && (
+                          <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginTop: 2 }}>
+                            Cust: <b>{meta.customerName}</b>
+                          </div>
+                        )}
+                        {meta.supplierName && (
+                          <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginTop: 2 }}>
+                            Supp: <b>{meta.supplierName}</b>
+                          </div>
+                        )}
+                      </div>
+                    ) : meta.valueImpact !== undefined ? (
+                      <div>
+                        <span className="mono" style={{ fontWeight: 700, fontSize: 13, color: meta.valueImpact < 0 ? "var(--red)" : "var(--green)" }}>
+                          {meta.valueImpact < 0 ? "-" : "+"}{fmt(Math.abs(meta.valueImpact))}
+                        </span>
+                        <div style={{ fontSize: 11, color: "var(--ink-soft)" }}>Stock Valuation</div>
+                      </div>
+                    ) : (
+                      <div className="mono" style={{ fontSize: 12, color: "var(--ink-soft)" }}>
+                        {a.target || "—"}
+                      </div>
+                    )}
+                  </td>
+                  <td style={{ textAlign: "right" }} onClick={e => e.stopPropagation()}>
+                    <div style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
+                      <button
+                        type="button"
+                        className="hf-btn hf-btn-ghost"
+                        style={{ padding: "4px 6px", color: "var(--red)" }}
+                        onClick={() => handleDeleteSingleLog(a)}
+                        title="Delete log record & reverse transaction (Requires PIN)"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                      <button
+                        type="button"
+                        className="hf-btn hf-btn-ghost"
+                        style={{ padding: "4px 6px" }}
+                        onClick={() => setSelectedLog(a)}
+                        title="Inspect full audit event details"
+                      >
+                        <Eye size={14} color="var(--ink-soft)" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={6} style={{ padding: 32, textAlign: "center", color: "var(--ink-soft)", fontSize: 13.5 }}>
-                  No audit entries match "{query}"{user !== "all" ? ` for ${user}` : ""}.
+                <td colSpan={6} style={{ padding: 40, textAlign: "center", color: "var(--ink-soft)", fontSize: 13.5 }}>
+                  <div style={{ marginBottom: 8 }}><Info size={28} color="var(--ink-soft)" /></div>
+                  No audit log records match the selected filters.
                 </td>
               </tr>
             )}
@@ -9312,50 +10135,308 @@ function AuditLog({ db, setDb, notify, currentUser }) {
         </table>
       </div>
 
+      {/* Deep Event Inspector Modal */}
       {selectedLog && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(20,24,30,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60 }} onClick={() => setSelectedLog(null)}>
-          <div className="hf-card" style={{ width: 480, maxWidth: "92vw", padding: 24 }} onClick={e => e.stopPropagation()}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
+        <div style={{ position: "fixed", inset: 0, background: "rgba(20,24,30,0.6)", backdropFilter: "blur(3px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1200 }} onClick={() => setSelectedLog(null)}>
+          <div className="hf-card hf-modal-card" style={{ width: 720, maxWidth: "95vw", maxHeight: "90vh", overflowY: "auto", padding: "24px 22px" }} onClick={e => e.stopPropagation()}>
+            {/* Modal Header */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
               <div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <div className="disp" style={{ fontSize: 22, fontWeight: 700 }}>Audit Event Details</div>
-                  {getCategoryPill(selectedLog.category)}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <div className="disp" style={{ fontSize: 22, fontWeight: 700 }}>Audit Event Inspector</div>
+                  {getCategoryPill(selectedLog.category, selectedLog.metadata)}
+                  {selectedLog.metadata?.offline && <span style={{ background: "var(--amber-tint)", color: "var(--amber)", border: "1px solid var(--amber)", borderRadius: 4, padding: "2px 6px", fontSize: 11, fontWeight: 700 }}>OFFLINE CAPTURE</span>}
                 </div>
                 <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 2 }}>
-                  Log Record ID: {selectedLog.id || uid("LOG")}
+                  Log Record ID: <span className="mono">{selectedLog.id || "LOG-ENTRY"}</span> · Timestamp: <span className="mono">{selectedLog.time}</span>
                 </div>
               </div>
-              <button onClick={() => setSelectedLog(null)} style={{ background: "none", border: "none", cursor: "pointer" }}><X size={18} /></button>
+              <button onClick={() => setSelectedLog(null)} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><X size={20} /></button>
             </div>
 
-            <div style={{ background: "var(--surface-hover)", padding: 14, borderRadius: 10, marginBottom: 16 }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: "var(--ink)" }}>
+            {/* Event Summary Banner */}
+            <div style={{ background: "var(--surface-hover)", padding: 16, borderRadius: 10, marginBottom: 16, border: "1px solid var(--line)" }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "var(--ink)", marginBottom: 4 }}>
                 {selectedLog.action}
               </div>
-              {selectedLog.detail && (
-                <div className="mono" style={{ fontSize: 13, marginTop: 4, color: "var(--rust)", fontWeight: 600 }}>
-                  {selectedLog.detail}
+              <div style={{ fontSize: 13, color: "var(--ink-soft)", lineHeight: 1.4 }}>
+                {selectedLog.detail || "No additional plain-text notes attached."}
+              </div>
+            </div>
+
+            {/* Operator & Target Metadata Grid */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 16 }}>
+              <div style={{ background: "var(--surface)", padding: 10, borderRadius: 8, border: "1px solid var(--line)" }}>
+                <div style={{ fontSize: 11, color: "var(--ink-soft)", fontWeight: 600, textTransform: "uppercase" }}>Operator / User</div>
+                <div style={{ fontSize: 13, fontWeight: 700, marginTop: 2 }}>{selectedLog.user} ({selectedLog.role || "Staff"})</div>
+              </div>
+              <div style={{ background: "var(--surface)", padding: 10, borderRadius: 8, border: "1px solid var(--line)" }}>
+                <div style={{ fontSize: 11, color: "var(--ink-soft)", fontWeight: 600, textTransform: "uppercase" }}>Target Entity</div>
+                <div style={{ fontSize: 13, fontWeight: 700, marginTop: 2 }}>{selectedLog.target || "System"}</div>
+              </div>
+              {selectedLog.metadata?.payment && (
+                <div style={{ background: "var(--surface)", padding: 10, borderRadius: 8, border: "1px solid var(--line)" }}>
+                  <div style={{ fontSize: 11, color: "var(--ink-soft)", fontWeight: 600, textTransform: "uppercase" }}>Payment Mode</div>
+                  <div style={{ marginTop: 2 }}>{getPaymentPill(selectedLog.metadata.payment)}</div>
+                </div>
+              )}
+              {selectedLog.metadata?.total !== undefined && (
+                <div style={{ background: "var(--surface)", padding: 10, borderRadius: 8, border: "1px solid var(--line)" }}>
+                  <div style={{ fontSize: 11, color: "var(--ink-soft)", fontWeight: 600, textTransform: "uppercase" }}>Total Transaction</div>
+                  <div className="mono text-profit" style={{ fontSize: 14, fontWeight: 700, marginTop: 2 }}>{fmt(selectedLog.metadata.total)}</div>
                 </div>
               )}
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
-              <Stat label="Timestamp" value={selectedLog.time} />
-              <Stat label="Operator / User" value={`${selectedLog.user} (${selectedLog.role || "Staff"})`} />
-              <Stat label="Category" value={selectedLog.category || "General"} />
-              <Stat label="Affected Entity" value={selectedLog.target || "System"} />
+            {/* Itemized Products Table (if sale, PO, quotation, etc.) */}
+            {selectedLog.metadata?.items && selectedLog.metadata.items.length > 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <div className="disp" style={{ fontSize: 15, fontWeight: 700, marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span>Itemized Product Breakdown</span>
+                  <span style={{ fontSize: 12, color: "var(--ink-soft)", fontWeight: 500 }}>
+                    {selectedLog.metadata.items.length} line item(s) · {selectedLog.metadata.totalQty || selectedLog.metadata.items.reduce((a, i) => a + (Number(i.qty) || 0), 0)} total units
+                  </span>
+                </div>
+                <div className="hf-card" style={{ padding: 0, overflowX: "auto" }}>
+                  <table className="hf-table" style={{ fontSize: 12.5 }}>
+                    <thead>
+                      <tr>
+                        <th>Product Description</th>
+                        <th style={{ width: 80, textAlign: "center" }}>Qty</th>
+                        <th style={{ width: 100, textAlign: "right" }}>Unit Price</th>
+                        <th style={{ width: 110, textAlign: "right" }}>Line Total</th>
+                        {role === "owner" && selectedLog.metadata.items.some(i => i.unitCost > 0) && (
+                          <th style={{ width: 100, textAlign: "right" }}>Unit Cost</th>
+                        )}
+                        {role === "owner" && selectedLog.metadata.items.some(i => i.unitCost > 0) && (
+                          <th style={{ width: 90, textAlign: "right" }}>Margin</th>
+                        )}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedLog.metadata.items.map((it, idx) => {
+                        const lineTotal = it.lineTotal || (it.qty * (it.unitPrice || it.unitBuyPrice || 0));
+                        const unitPrice = it.unitPrice || it.unitBuyPrice || 0;
+                        const unitCost = it.unitCost || 0;
+                        const lineCost = unitCost * (it.qty || 0);
+                        const lineProfit = lineTotal - lineCost;
+                        const marginPct = lineTotal > 0 && unitCost > 0 ? ((lineProfit / lineTotal) * 100).toFixed(1) : null;
+
+                        return (
+                          <tr key={idx}>
+                            <td>
+                              <div style={{ fontWeight: 600 }}>{it.name || "Product"}</div>
+                              {it.sku && <div className="mono" style={{ fontSize: 10.5, color: "var(--ink-soft)" }}>SKU: {it.sku}</div>}
+                            </td>
+                            <td style={{ textAlign: "center" }} className="mono">
+                              <b>{it.qty}</b> {it.unit || "units"}
+                            </td>
+                            <td style={{ textAlign: "right" }} className="mono">
+                              {fmt(unitPrice)}
+                            </td>
+                            <td style={{ textAlign: "right" }} className="mono text-profit" style={{ fontWeight: 700 }}>
+                              {fmt(lineTotal)}
+                            </td>
+                            {role === "owner" && selectedLog.metadata.items.some(i => i.unitCost > 0) && (
+                              <td style={{ textAlign: "right" }} className="mono" style={{ color: "var(--ink-soft)" }}>
+                                {unitCost > 0 ? fmt(unitCost) : "—"}
+                              </td>
+                            )}
+                            {role === "owner" && selectedLog.metadata.items.some(i => i.unitCost > 0) && (
+                              <td style={{ textAlign: "right" }} className="mono">
+                                {marginPct ? (
+                                  <span style={{ color: Number(marginPct) >= 0 ? "var(--green)" : "var(--red)", fontWeight: 600 }}>
+                                    +{marginPct}%
+                                  </span>
+                                ) : "—"}
+                              </td>
+                            )}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    <tfoot>
+                      <tr style={{ background: "var(--surface-hover)", fontWeight: 700 }}>
+                        <td>Summary Totals</td>
+                        <td style={{ textAlign: "center" }} className="mono">
+                          {selectedLog.metadata.totalQty || selectedLog.metadata.items.reduce((a, i) => a + (Number(i.qty) || 0), 0)}
+                        </td>
+                        <td></td>
+                        <td style={{ textAlign: "right" }} className="mono text-profit" style={{ fontSize: 14 }}>
+                          {fmt(selectedLog.metadata.total || selectedLog.metadata.items.reduce((a, i) => a + (i.lineTotal || i.qty * (i.unitPrice || i.unitBuyPrice || 0)), 0))}
+                        </td>
+                        {role === "owner" && selectedLog.metadata.cost !== undefined && (
+                          <td style={{ textAlign: "right" }} className="mono" style={{ color: "var(--ink-soft)" }}>
+                            {fmt(selectedLog.metadata.cost)}
+                          </td>
+                        )}
+                        {role === "owner" && selectedLog.metadata.profit !== undefined && (
+                          <td style={{ textAlign: "right" }} className="mono text-profit">
+                            +{fmt(selectedLog.metadata.profit)}
+                          </td>
+                        )}
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Before vs After Diff Cards (for Price Changes / Product Edits) */}
+            {selectedLog.metadata?.diffs && selectedLog.metadata.diffs.length > 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <div className="disp" style={{ fontSize: 15, fontWeight: 700, marginBottom: 8 }}>
+                  Field Modification Diffs
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10 }}>
+                  {selectedLog.metadata.diffs.map((d, idx) => (
+                    <div key={idx} style={{ background: "var(--surface)", padding: 12, borderRadius: 8, border: "1px solid var(--line)" }}>
+                      <div style={{ fontSize: 11.5, color: "var(--ink-soft)", fontWeight: 600 }}>{d.label}</div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+                        <span style={{ textDecoration: "line-through", color: "var(--red)", fontSize: 13 }} className="mono">
+                          {typeof d.oldVal === 'number' && d.field.includes('Price') ? fmt(d.oldVal) : d.oldVal}
+                        </span>
+                        <ArrowRight size={14} color="var(--ink-soft)" />
+                        <span style={{ color: "var(--green)", fontWeight: 700, fontSize: 14 }} className="mono">
+                          {typeof d.newVal === 'number' && d.field.includes('Price') ? fmt(d.newVal) : d.newVal}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Debt / Ledger Balance Impact Card */}
+            {(selectedLog.metadata?.prevBalance !== undefined || selectedLog.metadata?.prevStock !== undefined) && (
+              <div style={{ background: "var(--surface)", padding: 14, borderRadius: 10, border: "1px solid var(--line)", marginBottom: 16 }}>
+                <div className="disp" style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>Ledger Impact Breakdown</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                  {selectedLog.metadata.prevBalance !== undefined && (
+                    <>
+                      <div>
+                        <div style={{ fontSize: 11, color: "var(--ink-soft)" }}>Prior Debt Balance</div>
+                        <div className="mono" style={{ fontSize: 13, fontWeight: 600 }}>{fmt(selectedLog.metadata.prevBalance)}</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 11, color: "var(--ink-soft)" }}>Payment Applied</div>
+                        <div className="mono text-profit" style={{ fontSize: 13, fontWeight: 700 }}>-{fmt(selectedLog.metadata.amount)}</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 11, color: "var(--ink-soft)" }}>New Remaining Debt</div>
+                        <div className="mono" style={{ fontSize: 13, fontWeight: 700, color: selectedLog.metadata.newBalance > 0 ? "var(--red)" : "var(--green)" }}>
+                          {fmt(selectedLog.metadata.newBalance)}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                  {selectedLog.metadata.prevStock !== undefined && (
+                    <>
+                      <div>
+                        <div style={{ fontSize: 11, color: "var(--ink-soft)" }}>Prior Stock</div>
+                        <div className="mono" style={{ fontSize: 13, fontWeight: 600 }}>{selectedLog.metadata.prevStock} {selectedLog.metadata.unit}</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 11, color: "var(--ink-soft)" }}>Adjustment</div>
+                        <div className="mono" style={{ fontSize: 13, fontWeight: 700, color: selectedLog.metadata.mode === "decrease" ? "var(--red)" : "var(--green)" }}>
+                          {selectedLog.metadata.mode === "decrease" ? "-" : "+"}{selectedLog.metadata.qty} {selectedLog.metadata.unit}
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 11, color: "var(--ink-soft)" }}>New On-Hand Stock</div>
+                        <div className="mono" style={{ fontSize: 13, fontWeight: 700 }}>{selectedLog.metadata.newStock} {selectedLog.metadata.unit}</div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Raw Forensic JSON Accordion */}
+            <div style={{ marginBottom: 18 }}>
+              <div
+                onClick={() => setRawJsonOpen(o => !o)}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  padding: "8px 12px",
+                  background: "var(--surface)",
+                  borderRadius: 6,
+                  border: "1px solid var(--line)",
+                  cursor: "pointer",
+                  fontSize: 12.5,
+                  fontWeight: 600
+                }}
+              >
+                <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <Boxes size={14} color="var(--steel)" /> Raw Forensic JSON Compliance Payload
+                </span>
+                <span style={{ fontSize: 11, color: "var(--ink-soft)" }}>
+                  {rawJsonOpen ? "Hide ▲" : "Show ▼"}
+                </span>
+              </div>
+              {rawJsonOpen && (
+                <div style={{ marginTop: 6, position: "relative" }}>
+                  <button
+                    type="button"
+                    className="hf-btn hf-btn-ghost"
+                    style={{ position: "absolute", right: 8, top: 8, padding: "4px 8px", fontSize: 11, zIndex: 2 }}
+                    onClick={() => handleCopyJson(selectedLog)}
+                  >
+                    {copiedJson ? "✓ Copied!" : "Copy JSON"}
+                  </button>
+                  <pre
+                    style={{
+                      background: "#1E1E1E",
+                      color: "#9CDCFE",
+                      padding: 14,
+                      borderRadius: 8,
+                      fontSize: 11.5,
+                      fontFamily: "monospace",
+                      maxHeight: 220,
+                      overflowY: "auto",
+                      margin: 0
+                    }}
+                  >
+                    {JSON.stringify(selectedLog, null, 2)}
+                  </pre>
+                </div>
+              )}
             </div>
 
-            <div style={{ borderTop: "1px solid var(--line)", paddingTop: 14, display: "flex", justifyContent: "space-between" }}>
+            {/* Modal Bottom Actions */}
+            <div style={{ borderTop: "1px solid var(--line)", paddingTop: 14, display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
               <button
                 type="button"
                 className="hf-btn hf-btn-ghost"
-                style={{ color: "var(--red)" }}
+                style={{ color: "var(--red)", borderColor: "var(--red-tint)" }}
                 onClick={() => handleDeleteSingleLog(selectedLog)}
               >
-                <Trash2 size={14} /> Delete Record
+                <Trash2 size={14} /> Delete & Reverse Transaction
               </button>
-              <button className="hf-btn hf-btn-dark" onClick={() => setSelectedLog(null)}>Done</button>
+              <div style={{ display: "flex", gap: 8 }}>
+                {selectedLog.metadata?.invoiceNo && (
+                  <button
+                    type="button"
+                    className="hf-btn hf-btn-ghost"
+                    onClick={() => {
+                      const matchingSale = (db.sales || []).find(s => s.invoiceNo === selectedLog.metadata.invoiceNo);
+                      if (matchingSale) {
+                        exportReceiptPDF({ sale: matchingSale, db });
+                        notify("success", "Receipt Downloaded", `Receipt for ${matchingSale.invoiceNo} exported.`);
+                      } else {
+                        notify("info", "Receipt Unavailable", "Sale was deleted or archived.");
+                      }
+                    }}
+                  >
+                    <ReceiptIcon size={14} /> Print Receipt
+                  </button>
+                )}
+                <button className="hf-btn hf-btn-dark" onClick={() => setSelectedLog(null)}>
+                  Close Inspector
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -9929,10 +11010,59 @@ export default function App() {
     const safeUser = sanitizeUserForSession(user);
     setCurrentUser(safeUser);
     localStorage.setItem(AUTH_KEY, JSON.stringify(safeUser));
+
+    const todayStr = todayISO(0);
+    const timeStr = new Date().toTimeString().slice(0, 5);
+    setDb(prev => ({
+      ...prev,
+      auditLog: [
+        {
+          id: uid("LOG"),
+          time: `${todayStr} ${timeStr}`,
+          user: safeUser.name,
+          role: safeUser.role,
+          category: "Security",
+          action: `User signed in: ${safeUser.name} (${safeUser.username})`,
+          detail: `Authenticated session initiated as ${safeUser.role.toUpperCase()}`,
+          target: safeUser.username,
+          metadata: {
+            type: "login",
+            username: safeUser.username,
+            role: safeUser.role,
+          }
+        },
+        ...(prev.auditLog || [])
+      ]
+    }));
+
     notify("success", `Welcome back, ${safeUser.name}!`, `Signed in as ${safeUser.role.toUpperCase()}`);
   }
 
   function handleLogout() {
+    if (currentUser) {
+      const todayStr = todayISO(0);
+      const timeStr = new Date().toTimeString().slice(0, 5);
+      setDb(prev => ({
+        ...prev,
+        auditLog: [
+          {
+            id: uid("LOG"),
+            time: `${todayStr} ${timeStr}`,
+            user: currentUser.name,
+            role: currentUser.role,
+            category: "Security",
+            action: `User signed out: ${currentUser.name} (${currentUser.username})`,
+            detail: `User session terminated securely`,
+            target: currentUser.username,
+            metadata: {
+              type: "logout",
+              username: currentUser.username,
+            }
+          },
+          ...(prev.auditLog || [])
+        ]
+      }));
+    }
     setCurrentUser(null);
     localStorage.removeItem(AUTH_KEY);
     setUserDropdown(false);

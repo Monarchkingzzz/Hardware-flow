@@ -302,25 +302,39 @@ export function exportBestSellersPDF({ bestSellers, totalRevenue, totalProfit, s
 }
 
 /**
- * Export Audit Log to PDF
+ * Export Audit Log to PDF with Enhanced Transaction & Item Breakdown
  */
-export function exportAuditLogPDF({ logs, userFilter = "all", query = "" }) {
-  const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+export function exportAuditLogPDF({ logs, userFilter = "all", query = "", categoryFilter = "all" }) {
+  const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
   
-  const subtitle = `Filter: User [${userFilter.toUpperCase()}] ${query ? `· Query: "${query}"` : ""} · Total Records: ${logs.length}`;
-  addPDFHeader(doc, "System Audit Log Report", subtitle);
+  const filterParts = [];
+  if (userFilter && userFilter !== "all") filterParts.push(`User: ${userFilter}`);
+  if (categoryFilter && categoryFilter !== "all") filterParts.push(`Category: ${categoryFilter.toUpperCase()}`);
+  if (query) filterParts.push(`Search: "${query}"`);
+  
+  const subtitle = `Filter: [${filterParts.length > 0 ? filterParts.join(" | ") : "ALL ACTIVITIES"}] · Total Records: ${logs.length} · Generated: ${new Date().toLocaleString()}`;
+  addPDFHeader(doc, "System Forensic Audit Log Report", subtitle);
 
-  const tableBody = logs.map((log, index) => [
-    index + 1,
-    log.time || "—",
-    log.user || "System",
-    log.action || "—",
-    log.detail || "—",
-  ]);
+  const tableBody = logs.map((log, index) => {
+    let itemsText = log.detail || "—";
+    if (log.metadata?.items && log.metadata.items.length > 0) {
+      const itemsList = log.metadata.items.map(i => `${i.qty}× ${i.name} (@ KSh ${Number(i.unitPrice).toLocaleString()})`).join("; ");
+      itemsText = `${itemsList}\nTotal: KSh ${Number(log.metadata.total || 0).toLocaleString()}${log.metadata.payment ? ` (${log.metadata.payment.toUpperCase()})` : ""}${log.metadata.customerName ? ` · Cust: ${log.metadata.customerName}` : ""}`;
+    }
+
+    return [
+      index + 1,
+      log.time || "—",
+      `${log.user || "System"}\n(${log.role || "Staff"})`,
+      (log.category || "General").toUpperCase(),
+      log.action || "—",
+      itemsText,
+    ];
+  });
 
   autoTable(doc, {
     startY: 42,
-    head: [["#", "Timestamp", "User", "Action Description", "Details / Reference"]],
+    head: [["#", "Timestamp", "Actor / Role", "Category", "Action Description", "Itemized Breakdown & Ledger Impact"]],
     body: tableBody,
     theme: "grid",
     headStyles: {
@@ -331,7 +345,7 @@ export function exportAuditLogPDF({ logs, userFilter = "all", query = "" }) {
       cellPadding: 3,
     },
     bodyStyles: {
-      fontSize: 8,
+      fontSize: 7.5,
       cellPadding: 2.5,
       textColor: [30, 35, 42],
     },
@@ -340,16 +354,56 @@ export function exportAuditLogPDF({ logs, userFilter = "all", query = "" }) {
     },
     columnStyles: {
       0: { cellWidth: 10, halign: "center" },
-      1: { cellWidth: 32 },
-      2: { cellWidth: 26, fontStyle: "bold" },
-      3: { cellWidth: 68 },
-      4: { cellWidth: "auto" },
+      1: { cellWidth: 30 },
+      2: { cellWidth: 32 },
+      3: { cellWidth: 28 },
+      4: { cellWidth: 65, fontStyle: "bold" },
+      5: { cellWidth: "auto" },
     },
     margin: { left: 14, right: 14 },
   });
 
   addPDFFooter(doc);
   doc.save(`hardwareflow-audit-log-${new Date().toISOString().slice(0, 10)}.pdf`);
+}
+
+/**
+ * Export Audit Log as Tabular CSV File
+ */
+export function exportAuditLogCSV(logs) {
+  const headers = ["ID", "Timestamp", "User", "Role", "Category", "Action", "Detail", "Target", "Items Breakdown", "Payment Method", "Customer / Supplier", "Total Amount (KSh)"];
+  const rows = logs.map(a => {
+    let itemsStr = "";
+    if (a.metadata?.items && a.metadata.items.length > 0) {
+      itemsStr = a.metadata.items.map(i => `${i.qty}x ${i.name} @ ${i.unitPrice}`).join(" | ");
+    }
+    const customerOrSupp = a.metadata?.customerName || a.metadata?.supplierName || a.target || "";
+    const totalAmt = a.metadata?.total || "";
+
+    return [
+      `"${a.id || ''}"`,
+      `"${a.time || ''}"`,
+      `"${(a.user || '').replace(/"/g, '""')}"`,
+      `"${(a.role || '').replace(/"/g, '""')}"`,
+      `"${(a.category || '').replace(/"/g, '""')}"`,
+      `"${(a.action || '').replace(/"/g, '""')}"`,
+      `"${(a.detail || '').replace(/"/g, '""')}"`,
+      `"${(a.target || '').replace(/"/g, '""')}"`,
+      `"${itemsStr.replace(/"/g, '""')}"`,
+      `"${(a.metadata?.payment || '').replace(/"/g, '""')}"`,
+      `"${customerOrSupp.replace(/"/g, '""')}"`,
+      `"${totalAmt}"`
+    ];
+  });
+
+  const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
+  const encodedUri = encodeURI(csvContent);
+  const link = document.createElement("a");
+  link.setAttribute("href", encodedUri);
+  link.setAttribute("download", `hardwareflow-audit-ledger-${new Date().toISOString().slice(0, 10)}.csv`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
 }
 
 /**

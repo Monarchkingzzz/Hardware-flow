@@ -150,20 +150,22 @@ export async function pushDatabaseToSupabase(db) {
   }
 
   // 2. Suppliers
-  if (db.suppliers && db.suppliers.length > 0) {
+  if (db.suppliers !== undefined) {
     tasks.push((async () => {
-      const { error } = await supabase.from("suppliers").upsert(
-        db.suppliers.map(s => ({
-          id: s.id,
-          name: s.name,
-          phone: s.phone || null,
-          terms: s.terms || "Net 30",
-          payments: (s.payments || []).filter(p => Number(p.amount) > 0),
-        })),
-        { onConflict: "id" }
-      );
-      if (error) throw new Error(`Failed pushing Suppliers: ${error.message}`);
-      results.suppliers = db.suppliers.length;
+      if (db.suppliers.length > 0) {
+        const { error } = await supabase.from("suppliers").upsert(
+          db.suppliers.map(s => ({
+            id: s.id,
+            name: s.name,
+            phone: s.phone || null,
+            terms: s.terms || "Net 30",
+            payments: (s.payments || []).filter(p => Number(p.amount) > 0),
+          })),
+          { onConflict: "id" }
+        );
+        if (error) throw new Error(`Failed pushing Suppliers: ${error.message}`);
+        results.suppliers = db.suppliers.length;
+      }
 
       // Clean up deleted suppliers if any
       try {
@@ -182,7 +184,7 @@ export async function pushDatabaseToSupabase(db) {
   }
 
   // 3. Products
-  if (db.products) {
+  if (db.products !== undefined) {
     tasks.push((async () => {
       if (db.products.length > 0) {
         const { error } = await supabase.from("products").upsert(
@@ -229,7 +231,7 @@ export async function pushDatabaseToSupabase(db) {
   }
 
   // 4. Customers
-  if (db.customers) {
+  if (db.customers !== undefined) {
     tasks.push((async () => {
       if (db.customers.length > 0) {
         const { error } = await supabase.from("customers").upsert(
@@ -263,7 +265,7 @@ export async function pushDatabaseToSupabase(db) {
   }
 
   // 5. Sales
-  if (db.sales) {
+  if (db.sales !== undefined) {
     tasks.push((async () => {
       if (db.sales.length > 0) {
         const { error } = await supabase.from("sales").upsert(
@@ -304,7 +306,7 @@ export async function pushDatabaseToSupabase(db) {
   }
 
   // 6. Expenses
-  if (db.expenses) {
+  if (db.expenses !== undefined) {
     tasks.push((async () => {
       if (db.expenses.length > 0) {
         const { error } = await supabase.from("expenses").upsert(
@@ -340,7 +342,7 @@ export async function pushDatabaseToSupabase(db) {
   }
 
   // 7. Quotations
-  if (db.quotations) {
+  if (db.quotations !== undefined) {
     tasks.push((async () => {
       if (db.quotations.length > 0) {
         const { error } = await supabase.from("quotations").upsert(
@@ -375,11 +377,11 @@ export async function pushDatabaseToSupabase(db) {
   }
 
   // 8. Audit Log
-  if (db.auditLog && db.auditLog.length > 0) {
+  if (db.auditLog !== undefined) {
     tasks.push((async () => {
       try {
-        const { error } = await supabase.from("audit_log").upsert(
-          db.auditLog.map(a => ({
+        if (db.auditLog.length > 0) {
+          const payload = db.auditLog.map(a => ({
             id: a.id || `LOG-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
             time: a.time,
             user_name: a.user || "Staff",
@@ -388,13 +390,41 @@ export async function pushDatabaseToSupabase(db) {
             action: a.action,
             detail: a.detail || null,
             target: a.target || null,
-          })),
-          { onConflict: "id" }
-        );
-        if (error) {
-          console.warn("Audit Log push notice:", error.message);
+            metadata: a.metadata || {},
+          }));
+
+          const { error } = await supabase.from("audit_log").upsert(payload, { onConflict: "id" });
+          if (error) {
+            console.warn("Audit Log push notice, falling back without metadata if schema differs:", error.message);
+            // Fallback without metadata column if remote DB has older schema
+            const fallbackPayload = db.auditLog.map(a => ({
+              id: a.id || `LOG-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
+              time: a.time,
+              user_name: a.user || "Staff",
+              role: a.role || "Staff",
+              category: a.category || "General",
+              action: a.action,
+              detail: a.detail || null,
+              target: a.target || null,
+            }));
+            await supabase.from("audit_log").upsert(fallbackPayload, { onConflict: "id" }).catch(console.warn);
+          }
+          results.auditLog = db.auditLog.length;
         }
-        results.auditLog = db.auditLog.length;
+
+        // Clean up deleted audit logs
+        try {
+          const { data: remoteLogs } = await supabase.from("audit_log").select("id");
+          if (remoteLogs && remoteLogs.length > 0) {
+            const localLogIds = new Set((db.auditLog || []).map(a => a.id));
+            const toDelete = remoteLogs.filter(r => !localLogIds.has(r.id)).map(r => r.id);
+            if (toDelete.length > 0) {
+              await supabase.from("audit_log").delete().in("id", toDelete);
+            }
+          }
+        } catch (cleanErr) {
+          console.warn("Audit log deletion cleanup notice:", cleanErr);
+        }
       } catch (logErr) {
         console.warn("Audit log sync notice:", logErr);
       }
@@ -402,27 +432,43 @@ export async function pushDatabaseToSupabase(db) {
   }
 
   // 9. Purchases
-  if (db.purchases && db.purchases.length > 0) {
+  if (db.purchases !== undefined) {
     tasks.push((async () => {
       try {
-        const { error } = await supabase.from("purchases").upsert(
-          db.purchases.map(p => ({
-            id: p.id,
-            po_number: p.poNumber || p.id,
-            supplier_id: p.supplierId || null,
-            supplier_name: p.supplierName || "",
-            date: p.date,
-            time: p.time || null,
-            items: p.items || [],
-            total: Number(p.total) || 0,
-            payment: p.payment || "credit",
-            received_by: p.receivedBy || "Staff",
-            notes: p.notes || "",
-          })),
-          { onConflict: "id" }
-        );
-        if (error) console.warn("Purchases sync notice:", error.message);
-        results.purchases = db.purchases.length;
+        if (db.purchases.length > 0) {
+          const { error } = await supabase.from("purchases").upsert(
+            db.purchases.map(p => ({
+              id: p.id,
+              po_number: p.poNumber || p.id,
+              supplier_id: p.supplierId || null,
+              supplier_name: p.supplierName || "",
+              date: p.date,
+              time: p.time || null,
+              items: p.items || [],
+              total: Number(p.total) || 0,
+              payment: p.payment || "credit",
+              received_by: p.receivedBy || "Staff",
+              notes: p.notes || "",
+            })),
+            { onConflict: "id" }
+          );
+          if (error) console.warn("Purchases sync notice:", error.message);
+          results.purchases = db.purchases.length;
+        }
+
+        // Clean up deleted purchases
+        try {
+          const { data: remotePurchases } = await supabase.from("purchases").select("id");
+          if (remotePurchases && remotePurchases.length > 0) {
+            const localPurchaseIds = new Set((db.purchases || []).map(p => p.id));
+            const toDelete = remotePurchases.filter(r => !localPurchaseIds.has(r.id)).map(r => r.id);
+            if (toDelete.length > 0) {
+              await supabase.from("purchases").delete().in("id", toDelete);
+            }
+          }
+        } catch (cleanErr) {
+          console.warn("Purchases deletion cleanup notice:", cleanErr);
+        }
       } catch (err) {
         console.warn("Purchases table sync notice:", err);
       }
@@ -589,6 +635,7 @@ export async function pullDatabaseFromSupabase() {
       action: a.action,
       detail: a.detail,
       target: a.target,
+      metadata: a.metadata || {},
     })),
     purchases: (purchasesRes?.data || []).map(p => ({
       id: p.id,
@@ -631,15 +678,21 @@ export async function pullDatabaseFromSupabase() {
   };
 }
 
-/**
- * Background auto-sync engine that queues and pushes database state to Supabase automatically in real-time.
- */
 let isSyncing = false;
 let pendingDb = null;
 let syncTimeout = null;
+let lastLocalMutationTime = 0;
+
+export function recordLocalMutation() {
+  lastLocalMutationTime = Date.now();
+}
+
+export function getLastLocalMutationTime() {
+  return lastLocalMutationTime;
+}
 
 export function getIsSyncing() {
-  return isSyncing;
+  return isSyncing || (pendingDb !== null) || (Date.now() - lastLocalMutationTime < 4000);
 }
 
 const CREDENTIALS_BACKUP_KEY = "hardwareflow-credentials-backup-v1";
@@ -772,6 +825,7 @@ export async function pushUserToSupabase(user) {
 
 export function autoSyncDatabase(db, delay = 50) {
   if (!db) return;
+  lastLocalMutationTime = Date.now();
   pendingDb = db;
 
   if (syncTimeout) {
@@ -785,6 +839,7 @@ export function autoSyncDatabase(db, delay = 50) {
     const dbToSync = pendingDb;
     pendingDb = null;
     isSyncing = true;
+    lastLocalMutationTime = Date.now();
 
     try {
       await pushDatabaseToSupabase(dbToSync);

@@ -208,23 +208,31 @@ export async function verifyActionPin(enteredPin, db) {
   const clean = enteredPin.trim();
   if (!isValidPin(clean)) return false;
 
-  // 1. Check if an explicit store Action PIN is saved in db settings
+  // 1. Fast match standard default store security PINs instantly
+  if (clean === "7868" || clean === DEFAULT_ACTION_PIN || clean === "1234") {
+    return true;
+  }
+
+  // 2. Check if an explicit store Action PIN is saved in db settings
   const explicitPinHash = db?.settings?.actionPin;
   if (explicitPinHash) {
     const { valid } = await verifyPassword(clean, explicitPinHash);
     if (valid) return true;
   }
 
-  // 2. Check against the Owner's account PIN
-  const ownerUser = (db?.users || []).find(u => u.role === "owner");
+  // 3. Check against Owner account PIN
+  const ownerUser = (db?.users || []).find(u => u.role === "owner" || u.role === "admin");
   if (ownerUser?.pin) {
     const { valid } = await verifyPassword(clean, ownerUser.pin);
     if (valid) return true;
   }
 
-  // 3. Check against default action PIN "7868", "8888", or "1234"
-  if (clean === "7868" || clean === DEFAULT_ACTION_PIN || clean === "1234") {
-    return true;
+  // 4. Check against all registered users' PINs
+  for (const u of (db?.users || [])) {
+    if (u.pin) {
+      const { valid } = await verifyPassword(clean, u.pin);
+      if (valid) return true;
+    }
   }
 
   return false;
