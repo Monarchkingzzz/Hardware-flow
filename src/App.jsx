@@ -7989,27 +7989,41 @@ function Quotations({ db, setDb, notify, currentUser }) {
   });
 
   function convert(q) {
-    const items = q.items.map(i => {
-      const prod = db.products.find(p => p.id === i.productId);
+    if (!q || !q.items || q.items.length === 0) {
+      notify("warning", "Empty Quotation", "This quotation has no items to convert.");
+      return;
+    }
+
+    const saleItems = (q.items || []).map(i => {
+      const prod = (db.products || []).find(p => p.id === i.productId);
+      const conversion = Number(prod?.conversionFactor) > 0 ? Number(prod.conversionFactor) : 1;
+      const buyPrice = Number(prod?.buyPrice) || 0;
       return {
         productId: i.productId,
         qty: Number(i.qty) || 0,
-        unitPrice: i.unitPrice,
-        unitCost: prod ? prod.buyPrice / (prod.conversionFactor || 1) : 0,
-        product: prod,
+        unitPrice: Number(i.unitPrice) || Number(prod?.sellPrice) || 0,
+        unitCost: buyPrice / conversion,
       };
     });
 
     // Check inventory availability before converting
-    const overStockItems = items.filter(i => (Number(i.qty) || 0) > (i.product?.stock || 0));
+    const overStockItems = saleItems.filter(i => {
+      const prod = (db.products || []).find(p => p.id === i.productId);
+      return (Number(i.qty) || 0) > (Number(prod?.stock) || 0);
+    });
+
     if (overStockItems.length > 0) {
-      const summary = overStockItems.map(i => `"${i.product?.name || 'Item'}" (Requested: ${i.qty}, In Stock: ${i.product?.stock || 0})`).join("; ");
+      const summary = overStockItems.map(i => {
+        const prod = (db.products || []).find(p => p.id === i.productId);
+        return `"${prod?.name || 'Item'}" (Requested: ${i.qty}, In Stock: ${prod?.stock || 0})`;
+      }).join("; ");
       notify("error", "Conversion Blocked — Insufficient Stock", `Cannot convert quotation to sale. Requested items exceed inventory: ${summary}. Please receive stock first.`);
       return;
     }
 
-    const total = items.reduce((a, i) => a + i.unitPrice * i.qty, 0);
-    const cost = items.reduce((a, i) => a + i.unitCost * i.qty, 0);
+    const total = saleItems.reduce((a, i) => a + (i.unitPrice * i.qty), 0);
+    const cost = saleItems.reduce((a, i) => a + (i.unitCost * i.qty), 0);
+    const profit = total - cost;
     
     const existingInvSeqs = (db.sales || []).map(s => {
       const m = String(s.invoiceNo || "").match(/\d+$/);
@@ -8018,28 +8032,31 @@ function Quotations({ db, setDb, notify, currentUser }) {
     const nextSeqNum = Math.max(457, ...existingInvSeqs, Number(db.invoiceSeq) || 0) + 1;
     const invoiceNo = `INV-2026-${String(nextSeqNum).padStart(5, "0")}`;
     const employee = currentUser?.name || "Owner";
+    const todayStr = todayISO(0);
+    const timeStr = new Date().toTimeString().slice(0, 5);
 
     const sale = {
       id: uid("INV"),
       invoiceNo,
-      date: todayISO(0),
-      time: new Date().toTimeString().slice(0, 5),
-      items,
+      date: todayStr,
+      time: timeStr,
+      items: saleItems,
       total,
       cost,
-      profit: total - cost,
+      profit,
       payment: "credit",
-      customerId: q.customerId,
-      employee
+      customerId: q.customerId || null,
+      employee,
+      offline: !navigator.onLine,
     };
 
     const customerObj = (db.customers || []).find(c => c.id === q.customerId);
     const customerName = customerObj ? customerObj.name : "Walk-in";
-    const totalQty = items.reduce((a, b) => a + (Number(b.qty) || 0), 0);
-    const itemsDetailText = items.map(i => {
-      const prod = i.product;
+    const totalQty = saleItems.reduce((a, b) => a + (Number(b.qty) || 0), 0);
+    const itemsDetailText = saleItems.map(i => {
+      const prod = (db.products || []).find(p => p.id === i.productId);
       const u = prod?.baseUnit || "piece";
-      return `${i.qty} ${formatUnit(i.qty, u)} × ${prod?.name || 'Item'} @ ${fmt(i.unitPrice)} (= ${fmt(i.qty * i.unitPrice)})`;
+      return `${i.qty} ${u} × ${prod?.name || 'Item'} @ ${fmt(i.unitPrice)} (= ${fmt(i.qty * i.unitPrice)})`;
     }).join(", ");
 
     setDb(prev => {
@@ -8051,22 +8068,36 @@ function Quotations({ db, setDb, notify, currentUser }) {
 
       return {
         ...prev,
-        products: prev.products.map(p => {
-          const line = items.find(i => i.productId === p.id);
+        products: (prev.products || []).map(p => {
+          const line = saleItems.find(i => i.productId === p.id);
           if (!line) return p;
+          const newStock = (Number(p.stock) || 0) - line.qty;
           return {
             ...p,
-            stock: p.stock - line.qty,
-            history: [...p.history, { date: sale.date, action: "Sale", qty: -line.qty, user: employee }]
+            stock: newStock,
+            history: [
+              ...(p.history || []),
+              {
+                id: uid("H"),
+                date: todayStr,
+                time: timeStr,
+                action: "Sale",
+                ref: invoiceNo,
+                qty: -line.qty,
+                balance: newStock,
+                user: employee,
+                reason: `Converted from Quotation ${q.number}`,
+              }
+            ]
           };
         }),
-        sales: [sale, ...prev.sales],
+        sales: [sale, ...(prev.sales || [])],
         invoiceSeq: resolvedSeq,
-        quotations: prev.quotations.map(x => x.id === q.id ? { ...x, status: "converted" } : x),
+        quotations: (prev.quotations || []).map(x => (x.id === q.id || x.number === q.number) ? { ...x, status: "converted" } : x),
         auditLog: [
           {
             id: uid("LOG"),
-            time: todayISO(0) + " " + new Date().toTimeString().slice(0, 5),
+            time: `${todayStr} ${timeStr}`,
             user: employee,
             role: currentUser?.role || "Staff",
             category: "Quotation Converted",
@@ -8080,19 +8111,23 @@ function Quotations({ db, setDb, notify, currentUser }) {
               total,
               cost,
               profit,
-              customerId: q.customerId,
+              customerId: q.customerId || null,
               customerName,
-              itemCount: items.length,
+              itemCount: saleItems.length,
               totalQty,
-              items: items.map(i => ({
-                productId: i.productId,
-                name: i.product?.name || "Product",
-                qty: i.qty,
-                unit: i.product?.baseUnit || "piece",
-                unitPrice: i.unitPrice,
-                unitCost: i.unitCost,
-                lineTotal: i.qty * i.unitPrice,
-              }))
+              items: saleItems.map(i => {
+                const prod = (prev.products || []).find(p => p.id === i.productId);
+                return {
+                  productId: i.productId,
+                  name: prod?.name || "Product",
+                  sku: prod?.sku || "",
+                  qty: i.qty,
+                  unit: prod?.baseUnit || "piece",
+                  unitPrice: i.unitPrice,
+                  unitCost: i.unitCost,
+                  lineTotal: i.qty * i.unitPrice,
+                };
+              })
             }
           },
           ...(prev.auditLog || [])
@@ -8100,7 +8135,7 @@ function Quotations({ db, setDb, notify, currentUser }) {
       };
     });
 
-    notify("success", "Quotation Converted", `${q.number} converted to sale invoice ${invoiceNo}.`);
+    notify("success", "Quotation Converted", `${q.number} converted to credit sale invoice ${invoiceNo}.`);
     setViewing(null);
   }
 
