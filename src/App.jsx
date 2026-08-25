@@ -603,9 +603,16 @@ function useDB() {
             mergedUsers.push(remainingLocalU);
           }
 
+          // Non-destructive merge for audit logs on launch
+          const cloudLogIds = new Set((cloudDb.auditLog || []).map(a => a.id));
+          const pendingLocalLogs = (baseLocalDb.auditLog || []).filter(a => a.id && !cloudLogIds.has(a.id));
+          const mergedAuditLogs = [...pendingLocalLogs, ...(cloudDb.auditLog || [])];
+          mergedAuditLogs.sort((a, b) => (b.time || "").localeCompare(a.time || ""));
+
           targetDb = {
             ...cloudDb,
             users: mergedUsers,
+            auditLog: mergedAuditLogs,
             settings: {
               ...(baseLocalDb.settings || {}),
               ...(cloudDb.settings || {}),
@@ -748,6 +755,12 @@ function useDB() {
                 mergedUsers.push(remainingLocalU);
               }
 
+              // Non-destructive merge for audit logs in realtime
+              const cloudLogIds = new Set((cloudDb.auditLog || []).map(a => a.id));
+              const pendingLocalLogs = (prevLocal.auditLog || []).filter(a => a.id && !cloudLogIds.has(a.id));
+              const mergedAuditLogs = [...pendingLocalLogs, ...(cloudDb.auditLog || [])];
+              mergedAuditLogs.sort((a, b) => (b.time || "").localeCompare(a.time || ""));
+
               const merged = {
                 ...cloudDb,
                 users: mergedUsers,
@@ -758,7 +771,7 @@ function useDB() {
                 quotations: mergedQuotations,
                 sales: [...pendingLocalSales, ...(cloudDb.sales || [])],
                 expenses: [...pendingLocalExpenses, ...(cloudDb.expenses || [])],
-                auditLog: cloudDb.auditLog || prevLocal.auditLog || [],
+                auditLog: mergedAuditLogs,
                 invoiceSeq: Math.max(cloudDb.invoiceSeq || 0, prevLocal.invoiceSeq || 0),
                 quoteSeq: Math.max(cloudDb.quoteSeq || 0, prevLocal.quoteSeq || 0),
                 poSeq: Math.max(cloudDb.poSeq || 0, prevLocal.poSeq || 0),
@@ -2384,7 +2397,7 @@ function POS({ db, setDb, role, notify, currentUser }) {
             detail: `${fmt(total)} via ${payment.toUpperCase()}${!navigator.onLine ? " (Offline)" : ""}`,
             target: resolvedInvoiceNo,
           },
-          ...prev.auditLog
+          ...(prev.auditLog || [])
         ],
       };
     });
@@ -3439,7 +3452,7 @@ function StockAdjustmentModal({ db, setDb, initialProduct, onCancel, notify, cur
           detail: `Reason: ${fullReason} · Prior stock: ${currentStock} → New stock: ${newStock} · Value Impact: ${fmt(valueDifference)}`,
           target: product.name,
         },
-        ...prev.auditLog
+        ...(prev.auditLog || [])
       ]
     }));
 
@@ -3766,7 +3779,7 @@ function ExcelImportModal({ db, setDb, onCancel, notify, currentUser, role }) {
           detail: `File: ${workbookMeta?.filename} · Added stock value: ${fmt(processedResult.totalEstimatedStockValue)}`,
           target: `${newProducts.length} Products`,
         },
-        ...prev.auditLog
+        ...(prev.auditLog || [])
       ]
     }));
 
@@ -4464,7 +4477,7 @@ function Inventory({ db, setDb, role, notify, currentUser, onReceiveShortcut }) 
           detail: `SKU: ${p.sku} · Initial stock: ${p.stock} ${p.baseUnit} · Cost: ${fmt(getProductUnitCost(p))}`,
           target: p.name,
         },
-        ...prev.auditLog
+        ...(prev.auditLog || [])
       ]
     }));
 
@@ -5085,7 +5098,7 @@ function ProductDrawer({ product, db, setDb, canSeeCost, onDelete, onClose, noti
           detail: `Sell price: ${fmt(editForm.sellPrice)} · Unit Cost: ${fmt(updatedUnitCost)} · Stock: ${editForm.stock} ${editForm.baseUnit}`,
           target: editForm.name,
         },
-        ...prev.auditLog
+        ...(prev.auditLog || [])
       ]
     }));
 
@@ -5749,7 +5762,7 @@ function Receiving({ db, setDb, notify, currentUser, prefill, onClearPrefill }) 
         poSeq: nextPoSeq,
         expenses: updatedExpenses,
         suppliers: updatedSuppliers,
-        auditLog: [auditEntry, ...prev.auditLog]
+        auditLog: [auditEntry, ...(prev.auditLog || [])]
       };
     });
 
@@ -7676,7 +7689,7 @@ function Quotations({ db, setDb, notify, currentUser }) {
             detail: invoiceNo,
             target: q.number,
           },
-          ...prev.auditLog
+          ...(prev.auditLog || [])
         ],
       };
     });
@@ -9022,6 +9035,7 @@ function revertTransactionFromAuditLog(prevDb, logItem) {
 function AuditLog({ db, setDb, notify, currentUser }) {
   const [query, setQuery] = useState("");
   const [user, setUser] = useState("all");
+  const [categoryFilter, setCategoryFilter] = useState("all");
   const [selectedLog, setSelectedLog] = useState(null);
   const [pinModal, setPinModal] = useState({
     isOpen: false,
@@ -9031,20 +9045,50 @@ function AuditLog({ db, setDb, notify, currentUser }) {
   });
 
   const users = useMemo(() => {
-    const set = new Set((db.auditLog || []).map(a => a.user));
+    const set = new Set((db.auditLog || []).map(a => a.user).filter(Boolean));
     return ["all", ...Array.from(set)];
   }, [db.auditLog]);
 
+  const rawLogs = useMemo(() => {
+    const list = [...(db.auditLog || [])];
+    return list.sort((a, b) => (b.time || "").localeCompare(a.time || ""));
+  }, [db.auditLog]);
+
+  // Category counts for quick filter tabs
+  const counts = useMemo(() => {
+    const c = { all: rawLogs.length, sales: 0, stock: 0, payments: 0, prices: 0, security: 0 };
+    rawLogs.forEach(a => {
+      const cat = (a.category || "").toLowerCase();
+      if (cat.includes("sale")) c.sales++;
+      else if (cat.includes("stock") || cat.includes("received") || cat.includes("adjustment") || cat.includes("product")) c.stock++;
+      else if (cat.includes("payment") || cat.includes("expense") || cat.includes("debt")) c.payments++;
+      else if (cat.includes("price")) c.prices++;
+      else if (cat.includes("security") || cat.includes("login") || cat.includes("password") || cat.includes("pin") || cat.includes("profile")) c.security++;
+    });
+    return c;
+  }, [rawLogs]);
+
   const q = query.trim().toLowerCase();
-  const filtered = (db.auditLog || []).filter(a => {
+  const filtered = rawLogs.filter(a => {
     if (user !== "all" && a.user !== user) return false;
+    
+    if (categoryFilter !== "all") {
+      const cat = (a.category || "").toLowerCase();
+      if (categoryFilter === "sales" && !cat.includes("sale")) return false;
+      if (categoryFilter === "stock" && !cat.includes("stock") && !cat.includes("received") && !cat.includes("adjustment") && !cat.includes("product")) return false;
+      if (categoryFilter === "payments" && !cat.includes("payment") && !cat.includes("expense") && !cat.includes("debt")) return false;
+      if (categoryFilter === "prices" && !cat.includes("price")) return false;
+      if (categoryFilter === "security" && !cat.includes("security") && !cat.includes("login") && !cat.includes("password") && !cat.includes("pin") && !cat.includes("profile")) return false;
+    }
+
     if (!q) return true;
     return (
       (a.action || "").toLowerCase().includes(q) ||
       (a.user || "").toLowerCase().includes(q) ||
       (a.detail || "").toLowerCase().includes(q) ||
       (a.time || "").toLowerCase().includes(q) ||
-      (a.category || "").toLowerCase().includes(q)
+      (a.category || "").toLowerCase().includes(q) ||
+      (a.target || "").toLowerCase().includes(q)
     );
   });
 
@@ -9055,10 +9099,12 @@ function AuditLog({ db, setDb, notify, currentUser }) {
 
   function getCategoryPill(category) {
     const cat = (category || "").toLowerCase();
+    if (cat.includes("credit sale")) return <Pill tone="purple">CREDIT SALE</Pill>;
     if (cat.includes("sale")) return <Pill tone="green">SALE</Pill>;
-    if (cat.includes("stock") || cat.includes("received")) return <Pill tone="steel">STOCK</Pill>;
+    if (cat.includes("stock") || cat.includes("received") || cat.includes("adjustment")) return <Pill tone="steel">STOCK</Pill>;
     if (cat.includes("price")) return <Pill tone="amber">PRICE</Pill>;
-    if (cat.includes("expense") || cat.includes("paid")) return <Pill tone="red">PAYMENT</Pill>;
+    if (cat.includes("expense") || cat.includes("payment") || cat.includes("debt")) return <Pill tone="red">PAYMENT</Pill>;
+    if (cat.includes("security") || cat.includes("password") || cat.includes("pin")) return <Pill tone="rust">SECURITY</Pill>;
     if (cat.includes("quotation")) return <Pill tone="purple">QUOTE</Pill>;
     return <Pill tone="ink">AUDIT</Pill>;
   }
@@ -9118,7 +9164,7 @@ function AuditLog({ db, setDb, notify, currentUser }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 12, flexWrap: "wrap" }}>
         <div>
           <div className="disp" style={{ fontSize: 26, fontWeight: 700 }}>System Audit Log</div>
-          <div style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>Complete traceability of all sales, payments, price changes, and stock movements.</div>
+          <div style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>Real-time traceability of all retail sales, credit invoices, stock movements, and financial ledger events.</div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <button
@@ -9138,13 +9184,65 @@ function AuditLog({ db, setDb, notify, currentUser }) {
             <input className="hf-input hf-input-with-left-icon" style={{ paddingLeft: 38, width: 220 }} placeholder="Search action, user, amount…" value={query} onChange={e => setQuery(e.target.value)} />
           </div>
           <select className="hf-input" style={{ width: 140 }} value={user} onChange={e => setUser(e.target.value)}>
-            {users.map(u => <option key={u} value={u}>{u === "all" ? "All Users" : u}</option>)}
+            {users.map(u => <option key={u} value={u}>{u === "all" ? "All Staff" : u}</option>)}
           </select>
         </div>
       </div>
 
+      {/* Category filter pills / tabs */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+        <button
+          type="button"
+          className={`hf-btn ${categoryFilter === "all" ? "hf-btn-primary" : "hf-btn-ghost"}`}
+          style={{ padding: "6px 12px", fontSize: 12, borderRadius: 20 }}
+          onClick={() => setCategoryFilter("all")}
+        >
+          All Activity ({counts.all})
+        </button>
+        <button
+          type="button"
+          className={`hf-btn ${categoryFilter === "sales" ? "hf-btn-primary" : "hf-btn-ghost"}`}
+          style={{ padding: "6px 12px", fontSize: 12, borderRadius: 20 }}
+          onClick={() => setCategoryFilter("sales")}
+        >
+          🛒 Sales ({counts.sales})
+        </button>
+        <button
+          type="button"
+          className={`hf-btn ${categoryFilter === "stock" ? "hf-btn-primary" : "hf-btn-ghost"}`}
+          style={{ padding: "6px 12px", fontSize: 12, borderRadius: 20 }}
+          onClick={() => setCategoryFilter("stock")}
+        >
+          📦 Stock & Receiving ({counts.stock})
+        </button>
+        <button
+          type="button"
+          className={`hf-btn ${categoryFilter === "payments" ? "hf-btn-primary" : "hf-btn-ghost"}`}
+          style={{ padding: "6px 12px", fontSize: 12, borderRadius: 20 }}
+          onClick={() => setCategoryFilter("payments")}
+        >
+          💳 Payments & Debt ({counts.payments})
+        </button>
+        <button
+          type="button"
+          className={`hf-btn ${categoryFilter === "prices" ? "hf-btn-primary" : "hf-btn-ghost"}`}
+          style={{ padding: "6px 12px", fontSize: 12, borderRadius: 20 }}
+          onClick={() => setCategoryFilter("prices")}
+        >
+          🏷️ Price Changes ({counts.prices})
+        </button>
+        <button
+          type="button"
+          className={`hf-btn ${categoryFilter === "security" ? "hf-btn-primary" : "hf-btn-ghost"}`}
+          style={{ padding: "6px 12px", fontSize: 12, borderRadius: 20 }}
+          onClick={() => setCategoryFilter("security")}
+        >
+          🔒 Security & Auth ({counts.security})
+        </button>
+      </div>
+
       <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 8, display: "flex", justifyContent: "space-between" }}>
-        <span>Showing <b>{filtered.length}</b> of <b>{(db.auditLog || []).length}</b> events</span>
+        <span>Showing <b>{filtered.length}</b> of <b>{rawLogs.length}</b> events in real-time</span>
         <span style={{ fontStyle: "italic" }}>Tip: Click on any log row to inspect detailed transaction metadata.</span>
       </div>
 

@@ -375,14 +375,14 @@ export async function pushDatabaseToSupabase(db) {
   }
 
   // 8. Audit Log
-  if (db.auditLog) {
+  if (db.auditLog && db.auditLog.length > 0) {
     tasks.push((async () => {
-      if (db.auditLog.length > 0) {
+      try {
         const { error } = await supabase.from("audit_log").upsert(
           db.auditLog.map(a => ({
-            id: a.id,
+            id: a.id || `LOG-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
             time: a.time,
-            user_name: a.user,
+            user_name: a.user || "Staff",
             role: a.role || "Staff",
             category: a.category || "General",
             action: a.action,
@@ -391,22 +391,12 @@ export async function pushDatabaseToSupabase(db) {
           })),
           { onConflict: "id" }
         );
-        if (error) throw new Error(`Failed pushing Audit Log: ${error.message}`);
-        results.auditLog = db.auditLog.length;
-      }
-
-      // Clean up deleted audit logs if any
-      try {
-        const { data: remoteLogs } = await supabase.from("audit_log").select("id");
-        if (remoteLogs && remoteLogs.length > 0) {
-          const localLogIds = new Set((db.auditLog || []).map(l => l.id));
-          const toDelete = remoteLogs.filter(r => !localLogIds.has(r.id)).map(r => r.id);
-          if (toDelete.length > 0) {
-            await supabase.from("audit_log").delete().in("id", toDelete);
-          }
+        if (error) {
+          console.warn("Audit Log push notice:", error.message);
         }
-      } catch (cleanErr) {
-        console.warn("Audit log deletion cleanup notice:", cleanErr);
+        results.auditLog = db.auditLog.length;
+      } catch (logErr) {
+        console.warn("Audit log sync notice:", logErr);
       }
     })());
   }
