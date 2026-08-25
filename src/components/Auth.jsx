@@ -332,7 +332,7 @@ export function LoginScreen({ db, onLogin, onForgotPassword, notify, theme, onTo
               type="button"
               className="hf-btn hf-btn-ghost"
               style={{ fontSize: 11.5, padding: "5px 10px", borderRadius: 8 }}
-              onClick={() => { setUsername("owner"); setPassword("admin123"); setError(""); }}
+              onClick={() => { setUsername("owner"); setPassword(""); setError(""); }}
             >
               👑 Owner
             </button>
@@ -340,7 +340,7 @@ export function LoginScreen({ db, onLogin, onForgotPassword, notify, theme, onTo
               type="button"
               className="hf-btn hf-btn-ghost"
               style={{ fontSize: 11.5, padding: "5px 10px", borderRadius: 8 }}
-              onClick={() => { setUsername("cashier"); setPassword("cashier123"); setError(""); }}
+              onClick={() => { setUsername("cashier"); setPassword(""); setError(""); }}
             >
               🛒 Cashier
             </button>
@@ -348,7 +348,7 @@ export function LoginScreen({ db, onLogin, onForgotPassword, notify, theme, onTo
               type="button"
               className="hf-btn hf-btn-ghost"
               style={{ fontSize: 11.5, padding: "5px 10px", borderRadius: 8 }}
-              onClick={() => { setUsername("store"); setPassword("store123"); setError(""); }}
+              onClick={() => { setUsername("store"); setPassword(""); setError(""); }}
             >
               📦 Storekeeper
             </button>

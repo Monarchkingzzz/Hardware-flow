@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { pushDatabaseToSupabase } from "./supabaseClient";
+import { pushDatabaseToSupabase, pushUserToSupabase } from "./supabaseClient";
 
 const OFFLINE_QUEUE_KEY = "hardwareflow-offline-sales-queue-v1";
 
@@ -101,9 +101,27 @@ export function useOnlineStatus() {
 }
 
 /**
- * Push offline sales queue to Supabase cloud when back online
+ * Push offline sales and credentials queue to Supabase cloud when back online
  */
 export async function syncOfflineQueue(db, notify) {
+  // 1. Sync pending offline credentials first
+  try {
+    const credsRaw = localStorage.getItem("hardwareflow-offline-credentials-queue-v1");
+    if (credsRaw) {
+      const credsQueue = JSON.parse(credsRaw);
+      if (Array.isArray(credsQueue) && credsQueue.length > 0) {
+        for (const u of credsQueue) {
+          await pushUserToSupabase(u);
+        }
+        localStorage.removeItem("hardwareflow-offline-credentials-queue-v1");
+        console.log(`[Offline Sync] Synchronized ${credsQueue.length} offline credential update(s) to Supabase.`);
+      }
+    }
+  } catch (credErr) {
+    console.warn("Offline credential sync notice:", credErr);
+  }
+
+  // 2. Sync pending offline sales
   const queue = getOfflineSalesQueue();
   if (queue.length === 0) return { success: true, count: 0 };
 
@@ -121,7 +139,7 @@ export async function syncOfflineQueue(db, notify) {
     clearOfflineSalesQueue();
 
     if (notify) {
-      notify("success", "Offline Sales Synchronized", `${queue.length} offline transaction(s) pushed to Supabase cloud.`);
+      notify("success", "Offline Data Synchronized", `${queue.length} offline transaction(s) pushed to Supabase cloud.`);
     }
 
     return { success: true, count: queue.length };

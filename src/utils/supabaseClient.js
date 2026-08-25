@@ -96,33 +96,55 @@ export async function pushDatabaseToSupabase(db) {
   // 1. Users
   if (db.users && db.users.length > 0) {
     tasks.push((async () => {
-      const { error } = await supabase.from("users").upsert(
-        db.users.map(u => ({
-          id: u.id,
-          username: u.username,
-          password: u.password,
-          name: u.name,
-          role: u.role,
-          phone: u.phone || null,
-          pin: u.pin || "8888",
-        })),
-        { onConflict: "id" }
-      );
-      if (error) throw new Error(`Failed pushing Users: ${error.message}`);
-      results.users = db.users.length;
-
-      // Clean up deleted users if any
       try {
-        const { data: remoteUsers } = await supabase.from("users").select("id");
+        // Fetch existing users to align IDs and avoid duplicate username constraint errors
+        let remoteUsers = [];
+        try {
+          const { data } = await supabase.from("users").select("id, username");
+          if (data) remoteUsers = data;
+        } catch (err) {
+          console.warn("Could not query existing users:", err);
+        }
+
+        const remoteByUsername = new Map(
+          remoteUsers.map(r => [String(r.username).toLowerCase().trim(), r.id])
+        );
+
+        const userPayloads = db.users.map(u => {
+          const cleanUser = String(u.username || "").toLowerCase().trim();
+          const resolvedId = remoteByUsername.get(cleanUser) || u.id;
+          return {
+            id: resolvedId,
+            username: cleanUser,
+            password: u.password,
+            name: u.name,
+            role: u.role || "cashier",
+            phone: u.phone || null,
+            pin: u.pin || "8888",
+          };
+        });
+
+        const { error } = await supabase.from("users").upsert(userPayloads, { onConflict: "id" });
+        if (error) {
+          console.warn("Batch user upsert notice, falling back to individual updates:", error.message);
+          for (const u of userPayloads) {
+            await supabase.from("users").upsert(u, { onConflict: "id" }).catch(console.warn);
+          }
+        }
+        results.users = db.users.length;
+
+        // Clean up deleted users if any
         if (remoteUsers && remoteUsers.length > 0) {
-          const localUserIds = new Set(db.users.map(u => u.id));
-          const toDelete = remoteUsers.filter(r => !localUserIds.has(r.id)).map(r => r.id);
+          const localUsernames = new Set(db.users.map(u => String(u.username).toLowerCase().trim()));
+          const toDelete = remoteUsers
+            .filter(r => !localUsernames.has(String(r.username).toLowerCase().trim()))
+            .map(r => r.id);
           if (toDelete.length > 0) {
             await supabase.from("users").delete().in("id", toDelete);
           }
         }
-      } catch (cleanErr) {
-        console.warn("User deletion cleanup notice:", cleanErr);
+      } catch (userTaskErr) {
+        console.warn("Users sync task error:", userTaskErr);
       }
     })());
   }
@@ -630,26 +652,131 @@ export function getIsSyncing() {
   return isSyncing;
 }
 
+const CREDENTIALS_BACKUP_KEY = "hardwareflow-credentials-backup-v1";
+const OFFLINE_CREDENTIALS_QUEUE_KEY = "hardwareflow-offline-credentials-queue-v1";
+
+/**
+ * Save updated user credentials in local resilient backup cache
+ */
+export function saveCredentialsBackup(username, userObj) {
+  try {
+    const raw = localStorage.getItem(CREDENTIALS_BACKUP_KEY);
+    const backup = raw ? JSON.parse(raw) : {};
+    const clean = String(username || "").toLowerCase().trim();
+    if (clean) {
+      backup[clean] = {
+        ...userObj,
+        username: clean,
+        updatedAt: new Date().toISOString(),
+      };
+      localStorage.setItem(CREDENTIALS_BACKUP_KEY, JSON.stringify(backup));
+    }
+  } catch (e) {
+    console.warn("Credentials backup notice:", e);
+  }
+}
+
+/**
+ * Retrieve credentials from local backup cache
+ */
+export function getCredentialsBackup() {
+  try {
+    const raw = localStorage.getItem(CREDENTIALS_BACKUP_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+/**
+ * Queue credential update for offline sync
+ */
+export function enqueueOfflineCredentials(user) {
+  try {
+    const raw = localStorage.getItem(OFFLINE_CREDENTIALS_QUEUE_KEY);
+    const queue = raw ? JSON.parse(raw) : [];
+    const clean = String(user.username || "").toLowerCase().trim();
+    const existingIdx = queue.findIndex(u => String(u.username || "").toLowerCase().trim() === clean);
+    if (existingIdx >= 0) {
+      queue[existingIdx] = { ...user, queuedAt: new Date().toISOString() };
+    } else {
+      queue.push({ ...user, queuedAt: new Date().toISOString() });
+    }
+    localStorage.setItem(OFFLINE_CREDENTIALS_QUEUE_KEY, JSON.stringify(queue));
+  } catch (e) {
+    console.warn("Offline credential queue notice:", e);
+  }
+}
+
 /**
  * Direct push for an individual user credential update to guarantee instant cloud persistence.
  */
 export async function pushUserToSupabase(user) {
+  if (!user) return { success: false, error: "No user provided" };
+  const cleanUsername = String(user.username || "").toLowerCase().trim();
+
+  // 1. Immediately cache locally in credentials backup
+  saveCredentialsBackup(cleanUsername, user);
+
   const supabase = getSupabaseClient();
-  if (!supabase || !user) return;
+  if (!supabase) {
+    console.warn("[Supabase] Client not initialized. Queuing credentials for sync.");
+    enqueueOfflineCredentials(user);
+    return { success: false, error: "Supabase client not ready" };
+  }
+
   try {
-    const { error } = await supabase.from("users").upsert({
-      id: user.id,
-      username: user.username,
+    // 2. Query Supabase for existing user record by username or ID
+    let targetId = user.id;
+    try {
+      const { data: existingList } = await supabase
+        .from("users")
+        .select("id, username")
+        .or(`username.ilike.${cleanUsername},id.eq.${user.id}`);
+
+      if (existingList && existingList.length > 0) {
+        targetId = existingList[0].id;
+      }
+    } catch (queryErr) {
+      console.warn("Supabase user search notice:", queryErr);
+    }
+
+    const payload = {
+      id: targetId,
+      username: cleanUsername,
       password: user.password,
       name: user.name,
-      role: user.role,
+      role: user.role || "cashier",
       phone: user.phone || null,
       pin: user.pin || "8888",
-    }, { onConflict: "id" });
-    if (error) throw error;
-    console.log("[Supabase] User credentials successfully synced to cloud for:", user.username);
+    };
+
+    // 3. Upsert with verified targetId
+    const { error: upsertError } = await supabase.from("users").upsert(payload, { onConflict: "id" });
+
+    if (upsertError) {
+      console.warn("[Supabase] Upsert warning, trying direct update:", upsertError.message);
+      // Fallback: direct update by id or username
+      const { error: updateError } = await supabase
+        .from("users")
+        .update({
+          password: user.password,
+          name: user.name,
+          role: user.role || "cashier",
+          phone: user.phone || null,
+          pin: user.pin || "8888",
+        })
+        .or(`id.eq.${targetId},username.ilike.${cleanUsername}`);
+
+      if (updateError) throw updateError;
+    }
+
+    console.log("[Supabase] User credentials successfully synced to cloud in real-time for:", cleanUsername);
+    return { success: true };
   } catch (err) {
-    console.warn("[Supabase] Direct user push notice:", err.message || err);
+    console.error("[Supabase] Direct user push failed, queuing offline:", err.message || err);
+    enqueueOfflineCredentials(user);
+    return { success: false, error: err.message || String(err) };
   }
 }
 

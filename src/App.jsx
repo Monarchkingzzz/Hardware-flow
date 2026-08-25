@@ -548,15 +548,72 @@ function useDB() {
           (cloudDb.products && cloudDb.products.length > 0) ||
           (cloudDb.sales && cloudDb.sales.length > 0) ||
           (cloudDb.customers && cloudDb.customers.length > 0) ||
-          (cloudDb.expenses && cloudDb.expenses.length > 0)
+          (cloudDb.expenses && cloudDb.expenses.length > 0) ||
+          (cloudDb.users && cloudDb.users.length > 0)
         );
 
-        let targetDb = db;
-        if (hasCloudData) {
-          targetDb = cloudDb;
+        let baseLocalDb = db;
+        try {
+          const rawLocal = localStorage.getItem(STORAGE_KEY);
+          if (rawLocal) baseLocalDb = JSON.parse(rawLocal);
+        } catch (e) {
+          console.warn("Could not reload local storage:", e);
         }
 
-        // Check if any users have unhashed legacy passwords or pins, and ensure owner recovery PIN is 7868
+        let targetDb = baseLocalDb;
+
+        if (hasCloudData) {
+          // Intelligently merge cloud users with local users, preserving the latest hashed passwords & PINs
+          const localUsersByUsername = new Map(
+            (baseLocalDb.users || []).map(u => [String(u.username || "").toLowerCase().trim(), u])
+          );
+
+          const mergedUsers = (cloudDb.users && cloudDb.users.length > 0)
+            ? cloudDb.users.map(cloudU => {
+                const cleanUser = String(cloudU.username || "").toLowerCase().trim();
+                const localU = localUsersByUsername.get(cleanUser);
+                localUsersByUsername.delete(cleanUser);
+
+                // If cloud has hashed password, take cloud. If cloud is empty/unhashed but local is hashed, preserve local.
+                let resolvedPass = cloudU.password;
+                if ((!resolvedPass || !resolvedPass.startsWith("pbkdf2:")) && localU?.password?.startsWith("pbkdf2:")) {
+                  resolvedPass = localU.password;
+                }
+
+                let resolvedPin = cloudU.pin;
+                if ((!resolvedPin || !resolvedPin.startsWith("pbkdf2:")) && localU?.pin?.startsWith("pbkdf2:")) {
+                  resolvedPin = localU.pin;
+                }
+
+                return {
+                  ...localU,
+                  ...cloudU,
+                  id: cloudU.id || localU?.id,
+                  username: cleanUser,
+                  password: resolvedPass || localU?.password || cloudU.password,
+                  pin: resolvedPin || localU?.pin || cloudU.pin || "8888",
+                  role: cloudU.role || localU?.role || "cashier",
+                  name: cloudU.name || localU?.name || cleanUser,
+                };
+              })
+            : (baseLocalDb.users || []);
+
+          // Append any local users not present in cloud
+          for (const remainingLocalU of localUsersByUsername.values()) {
+            mergedUsers.push(remainingLocalU);
+          }
+
+          targetDb = {
+            ...cloudDb,
+            users: mergedUsers,
+            settings: {
+              ...(baseLocalDb.settings || {}),
+              ...(cloudDb.settings || {}),
+            },
+          };
+        }
+
+        // Cryptographic password migration: convert any remaining plaintext passwords/pins to PBKDF2
         let needsMigration = false;
         const upgradedUsers = await Promise.all(
           (targetDb.users || []).map(async (u) => {
@@ -565,14 +622,11 @@ function useDB() {
               updated.password = await hashPassword(u.password);
               needsMigration = true;
             }
-            if (u.role === "owner" || u.username.toLowerCase() === "owner") {
-              const { valid: is7868 } = await verifyPassword("7868", u.pin || "");
-              if (!is7868) {
-                updated.pin = await hashPassword("7868");
-                needsMigration = true;
-              }
-            } else if (u.pin && !u.pin.startsWith("pbkdf2:")) {
+            if (u.pin && !u.pin.startsWith("pbkdf2:")) {
               updated.pin = await hashPassword(u.pin);
+              needsMigration = true;
+            } else if (!u.pin) {
+              updated.pin = await hashPassword(u.role === "owner" ? "7868" : "8888");
               needsMigration = true;
             }
             return updated;
@@ -581,13 +635,14 @@ function useDB() {
 
         if (needsMigration) {
           targetDb = { ...targetDb, users: upgradedUsers };
-          console.log("[HardwareFlow Security] Upgraded credentials to salted PBKDF2-SHA256 hashes.");
+          console.log("[HardwareFlow Security] Standardized credentials to salted PBKDF2-SHA256 hashes.");
         }
 
         isCloudInitialized.current = true;
         setDb(targetDb);
         localStorage.setItem(STORAGE_KEY, JSON.stringify(targetDb));
 
+        // Push any local upgrades to Supabase in real-time
         if (!hasCloudData || needsMigration) {
           autoSyncDatabase(targetDb, 0);
         }
@@ -655,8 +710,47 @@ function useDB() {
               const cloudExpIds = new Set((cloudDb.expenses || []).map(e => e.id));
               const pendingLocalExpenses = (prevLocal.expenses || []).filter(e => (e.offline === true || !cloudExpIds.has(e.id)));
 
+              // Intelligently merge users: preserve any newly updated password or pin
+              const localUsersByUsername = new Map(
+                (prevLocal.users || []).map(u => [String(u.username || "").toLowerCase().trim(), u])
+              );
+
+              const mergedUsers = (cloudDb.users && cloudDb.users.length > 0)
+                ? cloudDb.users.map(cloudU => {
+                    const cleanUser = String(cloudU.username || "").toLowerCase().trim();
+                    const localU = localUsersByUsername.get(cleanUser);
+                    localUsersByUsername.delete(cleanUser);
+
+                    let resolvedPass = cloudU.password;
+                    if ((!resolvedPass || !resolvedPass.startsWith("pbkdf2:")) && localU?.password?.startsWith("pbkdf2:")) {
+                      resolvedPass = localU.password;
+                    }
+
+                    let resolvedPin = cloudU.pin;
+                    if ((!resolvedPin || !resolvedPin.startsWith("pbkdf2:")) && localU?.pin?.startsWith("pbkdf2:")) {
+                      resolvedPin = localU.pin;
+                    }
+
+                    return {
+                      ...localU,
+                      ...cloudU,
+                      id: cloudU.id || localU?.id,
+                      username: cleanUser,
+                      password: resolvedPass || localU?.password || cloudU.password,
+                      pin: resolvedPin || localU?.pin || cloudU.pin || "8888",
+                      role: cloudU.role || localU?.role || "cashier",
+                      name: cloudU.name || localU?.name || cleanUser,
+                    };
+                  })
+                : (prevLocal.users || []);
+
+              for (const remainingLocalU of localUsersByUsername.values()) {
+                mergedUsers.push(remainingLocalU);
+              }
+
               const merged = {
                 ...cloudDb,
+                users: mergedUsers,
                 customers: mergedCustomers,
                 suppliers: mergedSuppliers,
                 products: mergedProducts,
@@ -669,6 +763,10 @@ function useDB() {
                 quoteSeq: Math.max(cloudDb.quoteSeq || 0, prevLocal.quoteSeq || 0),
                 poSeq: Math.max(cloudDb.poSeq || 0, prevLocal.poSeq || 0),
                 adjSeq: Math.max(cloudDb.adjSeq || 0, prevLocal.adjSeq || 0),
+                settings: {
+                  ...(prevLocal.settings || {}),
+                  ...(cloudDb.settings || {}),
+                },
               };
 
               try {
