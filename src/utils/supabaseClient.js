@@ -2,7 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 
 const SUPABASE_CONFIG_KEY = "hardwareflow-supabase-config";
 
-const DEFAULT_SUPABASE_URL = "https://indkvllqwmccwpdwfxnv.supabase.co";
+const DEFAULT_SUPABASE_URL = "https://ivoetfcryfaherjczzpl.supabase.co";
 const DEFAULT_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImluZGt2bGxxd21jY3dwZHdmeG52Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcxMjEwODYsImV4cCI6MjEwMjY5NzA4Nn0.JlizG02YVBCLpH8-DOwInykCkDfSvGgkZaR4mTg-VLg";
 
 export function getSupabaseCredentials() {
@@ -27,9 +27,9 @@ export function getSupabaseCredentials() {
     console.error("Failed to read Supabase config:", err);
   }
 
-  // Fallback to built-in HardwareFlow Supabase project credentials
-  if (DEFAULT_SUPABASE_URL && DEFAULT_SUPABASE_ANON_KEY) {
-    return { url: DEFAULT_SUPABASE_URL, key: DEFAULT_SUPABASE_ANON_KEY, source: "default" };
+  // Fallback to configured HardwareFlow Supabase project URL
+  if (DEFAULT_SUPABASE_URL) {
+    return { url: DEFAULT_SUPABASE_URL, key: DEFAULT_SUPABASE_ANON_KEY || "", source: "default" };
   }
 
   return { url: "", key: "", source: "none" };
@@ -38,8 +38,40 @@ export function getSupabaseCredentials() {
 export function saveSupabaseCredentials(url, key) {
   try {
     localStorage.setItem(SUPABASE_CONFIG_KEY, JSON.stringify({ url: url.trim(), key: key.trim() }));
+    cachedClient = null;
+    lastUrl = null;
+    lastKey = null;
   } catch (err) {
     console.error("Failed to save Supabase config:", err);
+  }
+}
+
+export function clearSupabaseCredentials() {
+  try {
+    localStorage.removeItem(SUPABASE_CONFIG_KEY);
+    cachedClient = null;
+    lastUrl = null;
+    lastKey = null;
+  } catch (err) {
+    console.error("Failed to clear Supabase config:", err);
+  }
+}
+
+export async function testSupabaseConnection(url, key) {
+  if (!url || !key) {
+    return { success: false, error: "Please provide both Supabase Project URL and Anon API Key." };
+  }
+  try {
+    const client = createClient(url.trim(), key.trim(), {
+      auth: { persistSession: false, autoRefreshToken: false }
+    });
+    const { data, error } = await client.from("products").select("count").limit(1);
+    if (error) {
+      return { success: false, error: error.message };
+    }
+    return { success: true, count: data };
+  } catch (err) {
+    return { success: false, error: err.message || String(err) };
   }
 }
 
