@@ -129,12 +129,12 @@ export async function pushDatabaseToSupabase(db) {
   const validSupplierIds = new Set((db.suppliers || []).map(s => s.id));
   const validCustomerIds = new Set((db.customers || []).map(c => c.id));
 
-  // STEP 1: Push Primary Parent Tables in Parallel
-  const primaryTasks = [];
+  // PHASE 1: Push Core Parent Tables First (Users, Suppliers, Customers)
+  const phase1Tasks = [];
 
   // 1. Users
   if (db.users && db.users.length > 0) {
-    primaryTasks.push((async () => {
+    phase1Tasks.push((async () => {
       try {
         let remoteUsers = [];
         try {
@@ -155,8 +155,8 @@ export async function pushDatabaseToSupabase(db) {
             id: resolvedId,
             username: cleanUser,
             password: u.password,
-            name: u.name || cleanUser,
-            role: u.role || "cashier",
+            name: (u.name && u.name.trim()) || cleanUser,
+            role: (u.role && ['owner', 'cashier', 'storekeeper', 'admin'].includes(u.role.toLowerCase())) ? u.role.toLowerCase() : 'cashier',
             phone: u.phone || null,
             pin: u.pin || "8888",
           };
@@ -170,17 +170,6 @@ export async function pushDatabaseToSupabase(db) {
           }
         }
         results.users = db.users.length;
-
-        // Clean up deleted users if any
-        if (remoteUsers && remoteUsers.length > 0) {
-          const localUsernames = new Set(db.users.map(u => String(u.username).toLowerCase().trim()));
-          const toDelete = remoteUsers
-            .filter(r => !localUsernames.has(String(r.username).toLowerCase().trim()))
-            .map(r => r.id);
-          if (toDelete.length > 0) {
-            await supabase.from("users").delete().in("id", toDelete);
-          }
-        }
       } catch (userTaskErr) {
         console.warn("[Supabase Sync] Users sync error:", userTaskErr);
       }
@@ -189,30 +178,18 @@ export async function pushDatabaseToSupabase(db) {
 
   // 2. Suppliers
   if (db.suppliers !== undefined && db.suppliers.length > 0) {
-    primaryTasks.push((async () => {
+    phase1Tasks.push((async () => {
       try {
-        const { error } = await supabase.from("suppliers").upsert(
-          db.suppliers.map(s => ({
-            id: s.id,
-            name: s.name,
-            phone: s.phone || null,
-            terms: s.terms || "Net 30",
-            payments: (s.payments || []).filter(p => Number(p.amount) > 0),
-          })),
-          { onConflict: "id" }
-        );
+        const supplierPayload = db.suppliers.map(s => ({
+          id: s.id,
+          name: (s.name && s.name.trim()) || "Supplier",
+          phone: s.phone || null,
+          terms: s.terms || "Net 30",
+          payments: Array.isArray(s.payments) ? s.payments.filter(p => Number(p.amount) > 0) : [],
+        }));
+        const { error } = await supabase.from("suppliers").upsert(supplierPayload, { onConflict: "id" });
         if (error) console.warn("[Supabase Sync] Suppliers notice:", error.message);
         results.suppliers = db.suppliers.length;
-
-        // Cleanup deleted suppliers
-        const { data: remoteSuppliers } = await supabase.from("suppliers").select("id");
-        if (remoteSuppliers && remoteSuppliers.length > 0) {
-          const localSupplierIds = new Set(db.suppliers.map(s => s.id));
-          const toDelete = remoteSuppliers.filter(r => !localSupplierIds.has(r.id)).map(r => r.id);
-          if (toDelete.length > 0) {
-            await supabase.from("suppliers").delete().in("id", toDelete);
-          }
-        }
       } catch (cleanErr) {
         console.warn("[Supabase Sync] Supplier cleanup notice:", cleanErr);
       }
@@ -221,89 +198,78 @@ export async function pushDatabaseToSupabase(db) {
 
   // 3. Customers
   if (db.customers !== undefined && db.customers.length > 0) {
-    primaryTasks.push((async () => {
+    phase1Tasks.push((async () => {
       try {
-        const { error } = await supabase.from("customers").upsert(
-          db.customers.map(c => ({
-            id: c.id,
-            name: c.name,
-            phone: c.phone || null,
-            credit_limit: Number(c.creditLimit) || 0,
-            payments: (c.payments || []).filter(p => Number(p.amount) > 0),
-          })),
-          { onConflict: "id" }
-        );
+        const customerPayload = db.customers.map(c => ({
+          id: c.id,
+          name: (c.name && c.name.trim()) || "Customer",
+          phone: c.phone || null,
+          credit_limit: Math.max(0, Number(c.creditLimit) || 0),
+          payments: Array.isArray(c.payments) ? c.payments.filter(p => Number(p.amount) > 0) : [],
+        }));
+        const { error } = await supabase.from("customers").upsert(customerPayload, { onConflict: "id" });
         if (error) console.warn("[Supabase Sync] Customers notice:", error.message);
         results.customers = db.customers.length;
-
-        // Cleanup deleted customers
-        const { data: remoteCustomers } = await supabase.from("customers").select("id");
-        if (remoteCustomers && remoteCustomers.length > 0) {
-          const localCustIds = new Set(db.customers.map(c => c.id));
-          const toDelete = remoteCustomers.filter(r => !localCustIds.has(r.id)).map(r => r.id);
-          if (toDelete.length > 0) {
-            await supabase.from("customers").delete().in("id", toDelete);
-          }
-        }
       } catch (cleanErr) {
-        console.warn("[Supabase Sync] Customer cleanup notice:", cleanErr);
+        console.warn("[Supabase Sync] Customer sync notice:", cleanErr);
       }
     })());
   }
 
-  // 4. Products
+  // Wait for all parent entities to be written and indexed
+  await Promise.all(phase1Tasks);
+
+  // PHASE 2: Push Products (Chunked in Batches of 50 to prevent payload timeout & FK violations)
   if (db.products !== undefined && db.products.length > 0) {
-    primaryTasks.push((async () => {
-      try {
-        const { error } = await supabase.from("products").upsert(
-          db.products.map(p => ({
-            id: p.id,
-            name: p.name,
-            category: p.category || "General",
-            brand: p.brand || "",
-            sku: p.sku || "",
-            description: p.description || "",
-            base_unit: p.baseUnit || "piece",
-            purchase_unit: p.purchaseUnit || "piece",
-            conversion_factor: Number(p.conversionFactor) || 1,
-            buy_price: Number(p.buyPrice) || 0,
-            sell_price: Number(p.sellPrice) || 0,
-            contractor_price: Number(p.contractorPrice) || 0,
-            wholesale_price: Number(p.wholesalePrice) || 0,
-            min_stock: Number(p.minStock) || 0,
-            stock: Number(p.stock) || 0,
-            supplier_id: (p.supplierId && validSupplierIds.has(p.supplierId)) ? p.supplierId : null,
-            location: p.location || "Main Store",
-            history: Array.isArray(p.history) ? p.history : [],
-          })),
-          { onConflict: "id" }
-        );
-        if (error) console.warn("[Supabase Sync] Products notice:", error.message);
-        results.products = db.products.length;
+    try {
+      const sanitizedProducts = db.products.map(p => ({
+        id: p.id,
+        name: (p.name && p.name.trim()) || ("Product " + (p.sku || p.id || "")),
+        category: p.category || "General",
+        brand: p.brand || "",
+        sku: p.sku || "",
+        description: p.description || "",
+        base_unit: p.baseUnit || "piece",
+        purchase_unit: p.purchaseUnit || "piece",
+        conversion_factor: Math.max(0.001, Number(p.conversionFactor) || 1),
+        buy_price: Math.max(0, Number(p.buyPrice) || 0),
+        sell_price: Math.max(0, Number(p.sellPrice) || 0),
+        contractor_price: Math.max(0, Number(p.contractorPrice) || 0),
+        wholesale_price: Math.max(0, Number(p.wholesalePrice) || 0),
+        min_stock: Math.max(0, Number(p.minStock) || 0),
+        stock: Number(p.stock) || 0,
+        supplier_id: (p.supplierId && validSupplierIds.has(p.supplierId)) ? p.supplierId : null,
+        location: p.location || "Main Store",
+        history: Array.isArray(p.history) ? p.history : [],
+      }));
 
-        // Cleanup deleted products
-        const { data: remoteProducts } = await supabase.from("products").select("id");
-        if (remoteProducts && remoteProducts.length > 0) {
-          const localProductIds = new Set(db.products.map(p => p.id));
-          const toDelete = remoteProducts.filter(r => !localProductIds.has(r.id)).map(r => r.id);
-          if (toDelete.length > 0) {
-            await supabase.from("products").delete().in("id", toDelete);
+      const CHUNK_SIZE = 50;
+      for (let i = 0; i < sanitizedProducts.length; i += CHUNK_SIZE) {
+        const chunk = sanitizedProducts.slice(i, i + CHUNK_SIZE);
+        const { error } = await supabase.from("products").upsert(chunk, { onConflict: "id" });
+        if (error) {
+          console.warn(`[Supabase Sync] Product chunk ${i}-${i + chunk.length} notice:`, error.message);
+          // Fallback: push item by item to isolate any single faulty row
+          for (const item of chunk) {
+            await supabase.from("products").upsert(item, { onConflict: "id" }).catch(e => {
+              console.warn("[Supabase Sync] Single product upsert error:", item.id, e.message);
+            });
           }
         }
-      } catch (cleanErr) {
-        console.warn("[Supabase Sync] Product cleanup notice:", cleanErr);
       }
-    })());
+      results.products = sanitizedProducts.length;
+      console.log(`[Supabase Sync] Successfully persisted ${sanitizedProducts.length} inventory products to cloud.`);
+    } catch (prodErr) {
+      console.error("[Supabase Sync] Products sync error:", prodErr);
+    }
   }
 
-  await Promise.all(primaryTasks);
-
-  // STEP 2: Push Dependent & Event Tables in Parallel
-  const secondaryTasks = [];
+  // PHASE 3: Push Dependent & Event Tables in Parallel
+  const phase3Tasks = [];
 
   // 5. Sales (Quota optimized: slice up to 500 recent sales)
   if (db.sales !== undefined && db.sales.length > 0) {
-    secondaryTasks.push((async () => {
+    phase3Tasks.push((async () => {
       try {
         const salesPayload = db.sales.slice(0, 500).map(s => ({
           id: s.id || `S-${Date.now()}`,
@@ -311,10 +277,10 @@ export async function pushDatabaseToSupabase(db) {
           date: s.date || new Date().toISOString().slice(0, 10),
           time: s.time || null,
           items: Array.isArray(s.items) ? s.items : [],
-          total: Number(s.total) || 0,
-          cost: Number(s.cost) || 0,
+          total: Math.max(0, Number(s.total) || 0),
+          cost: Math.max(0, Number(s.cost) || 0),
           profit: Number(s.profit) || 0,
-          payment: s.payment || "cash",
+          payment: (s.payment && ['cash', 'mpesa', 'bank', 'credit', 'split'].includes(s.payment.toLowerCase())) ? s.payment.toLowerCase() : 'cash',
           split_cash: s.splitCash ? Number(s.splitCash) : null,
           customer_id: (s.customerId && validCustomerIds.has(s.customerId)) ? s.customerId : null,
           employee: s.employee || "Staff",
@@ -331,15 +297,15 @@ export async function pushDatabaseToSupabase(db) {
 
   // 6. Expenses (Quota optimized: slice up to 500 recent expenses)
   if (db.expenses !== undefined && db.expenses.length > 0) {
-    secondaryTasks.push((async () => {
+    phase3Tasks.push((async () => {
       try {
         const expensePayload = db.expenses.slice(0, 500).map(e => ({
           id: e.id,
           date: e.date || new Date().toISOString().slice(0, 10),
-          category: e.category || "General",
-          amount: Number(e.amount) || 0,
+          category: (e.category && e.category.trim()) || "General",
+          amount: Math.max(0.01, Number(e.amount) || 1),
           description: e.description || "",
-          payment: e.payment || "cash",
+          payment: (e.payment && ['cash', 'mpesa', 'bank', 'other'].includes(e.payment.toLowerCase())) ? e.payment.toLowerCase() : 'cash',
           supplier_id: (e.supplierId && validSupplierIds.has(e.supplierId)) ? e.supplierId : null,
         }));
 
@@ -354,19 +320,17 @@ export async function pushDatabaseToSupabase(db) {
 
   // 7. Quotations
   if (db.quotations !== undefined && db.quotations.length > 0) {
-    secondaryTasks.push((async () => {
+    phase3Tasks.push((async () => {
       try {
-        const { error } = await supabase.from("quotations").upsert(
-          db.quotations.map(q => ({
-            id: q.id,
-            number: q.number || q.id,
-            customer_id: (q.customerId && validCustomerIds.has(q.customerId)) ? q.customerId : null,
-            date: q.date || new Date().toISOString().slice(0, 10),
-            status: q.status || "draft",
-            items: Array.isArray(q.items) ? q.items : [],
-          })),
-          { onConflict: "number" }
-        );
+        const quotePayload = db.quotations.map(q => ({
+          id: q.id,
+          number: q.number || q.id,
+          customer_id: (q.customerId && validCustomerIds.has(q.customerId)) ? q.customerId : null,
+          date: q.date || new Date().toISOString().slice(0, 10),
+          status: q.status || "draft",
+          items: Array.isArray(q.items) ? q.items : [],
+        }));
+        const { error } = await supabase.from("quotations").upsert(quotePayload, { onConflict: "number" });
         if (error) console.warn("[Supabase Sync] Quotations notice:", error.message);
         results.quotations = db.quotations.length;
       } catch (err) {
@@ -377,24 +341,22 @@ export async function pushDatabaseToSupabase(db) {
 
   // 8. Purchases
   if (db.purchases !== undefined && db.purchases.length > 0) {
-    secondaryTasks.push((async () => {
+    phase3Tasks.push((async () => {
       try {
-        const { error } = await supabase.from("purchases").upsert(
-          db.purchases.map(p => ({
-            id: p.id,
-            po_number: p.poNumber || p.id,
-            supplier_id: (p.supplierId && validSupplierIds.has(p.supplierId)) ? p.supplierId : null,
-            supplier_name: p.supplierName || "",
-            date: p.date || new Date().toISOString().slice(0, 10),
-            time: p.time || null,
-            items: Array.isArray(p.items) ? p.items : [],
-            total: Number(p.total) || 0,
-            payment: p.payment || "credit",
-            received_by: p.receivedBy || "Staff",
-            notes: p.notes || "",
-          })),
-          { onConflict: "id" }
-        );
+        const purchasePayload = db.purchases.map(p => ({
+          id: p.id,
+          po_number: p.poNumber || p.id,
+          supplier_id: (p.supplierId && validSupplierIds.has(p.supplierId)) ? p.supplierId : null,
+          supplier_name: p.supplierName || "",
+          date: p.date || new Date().toISOString().slice(0, 10),
+          time: p.time || null,
+          items: Array.isArray(p.items) ? p.items : [],
+          total: Math.max(0, Number(p.total) || 0),
+          payment: (p.payment && ['credit', 'cash', 'mpesa', 'bank'].includes(p.payment.toLowerCase())) ? p.payment.toLowerCase() : 'credit',
+          received_by: p.receivedBy || "Staff",
+          notes: p.notes || "",
+        }));
+        const { error } = await supabase.from("purchases").upsert(purchasePayload, { onConflict: "id" });
         if (error) console.warn("[Supabase Sync] Purchases notice:", error.message);
         results.purchases = db.purchases.length;
       } catch (err) {
@@ -405,7 +367,7 @@ export async function pushDatabaseToSupabase(db) {
 
   // 9. Audit Log (Ultra-reliable & Free-Tier Quota Efficient)
   if (db.auditLog !== undefined && Array.isArray(db.auditLog) && db.auditLog.length > 0) {
-    secondaryTasks.push((async () => {
+    phase3Tasks.push((async () => {
       try {
         const recentLogs = db.auditLog.slice(0, 300);
         const payload = recentLogs.map((a, idx) => ({
@@ -434,7 +396,7 @@ export async function pushDatabaseToSupabase(db) {
   }
 
   // 10. System Settings (Sequences & Action PIN)
-  secondaryTasks.push(
+  phase3Tasks.push(
     supabase.from("system_settings").upsert(
       [
         {
@@ -458,7 +420,7 @@ export async function pushDatabaseToSupabase(db) {
     ).catch(err => console.warn("[Supabase Sync] Settings notice:", err.message || err))
   );
 
-  await Promise.all(secondaryTasks);
+  await Promise.all(phase3Tasks);
   return results;
 }
 

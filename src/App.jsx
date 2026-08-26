@@ -677,13 +677,6 @@ function useDB() {
     (async () => {
       try {
         const cloudDb = await pullDatabaseFromSupabase();
-        const hasCloudData = cloudDb && (
-          (cloudDb.products && cloudDb.products.length > 0) ||
-          (cloudDb.sales && cloudDb.sales.length > 0) ||
-          (cloudDb.customers && cloudDb.customers.length > 0) ||
-          (cloudDb.expenses && cloudDb.expenses.length > 0) ||
-          (cloudDb.users && cloudDb.users.length > 0)
-        );
 
         let baseLocalDb = db;
         try {
@@ -693,65 +686,97 @@ function useDB() {
           console.warn("Could not reload local storage:", e);
         }
 
-        let targetDb = baseLocalDb;
+        // Intelligently merge cloud users with local users, preserving the latest hashed passwords & PINs
+        const localUsersByUsername = new Map(
+          (baseLocalDb?.users || []).map(u => [String(u.username || "").toLowerCase().trim(), u])
+        );
 
-        if (hasCloudData) {
-          // Intelligently merge cloud users with local users, preserving the latest hashed passwords & PINs
-          const localUsersByUsername = new Map(
-            (baseLocalDb.users || []).map(u => [String(u.username || "").toLowerCase().trim(), u])
-          );
+        const mergedUsers = (cloudDb?.users && cloudDb.users.length > 0)
+          ? cloudDb.users.map(cloudU => {
+              const cleanUser = String(cloudU.username || "").toLowerCase().trim();
+              const localU = localUsersByUsername.get(cleanUser);
+              localUsersByUsername.delete(cleanUser);
 
-          const mergedUsers = (cloudDb.users && cloudDb.users.length > 0)
-            ? cloudDb.users.map(cloudU => {
-                const cleanUser = String(cloudU.username || "").toLowerCase().trim();
-                const localU = localUsersByUsername.get(cleanUser);
-                localUsersByUsername.delete(cleanUser);
+              let resolvedPass = cloudU.password;
+              if ((!resolvedPass || !resolvedPass.startsWith("pbkdf2:")) && localU?.password?.startsWith("pbkdf2:")) {
+                resolvedPass = localU.password;
+              }
 
-                // If cloud has hashed password, take cloud. If cloud is empty/unhashed but local is hashed, preserve local.
-                let resolvedPass = cloudU.password;
-                if ((!resolvedPass || !resolvedPass.startsWith("pbkdf2:")) && localU?.password?.startsWith("pbkdf2:")) {
-                  resolvedPass = localU.password;
-                }
+              let resolvedPin = cloudU.pin;
+              if ((!resolvedPin || !resolvedPin.startsWith("pbkdf2:")) && localU?.pin?.startsWith("pbkdf2:")) {
+                resolvedPin = localU.pin;
+              }
 
-                let resolvedPin = cloudU.pin;
-                if ((!resolvedPin || !resolvedPin.startsWith("pbkdf2:")) && localU?.pin?.startsWith("pbkdf2:")) {
-                  resolvedPin = localU.pin;
-                }
+              return {
+                ...localU,
+                ...cloudU,
+                id: cloudU.id || localU?.id,
+                username: cleanUser,
+                password: resolvedPass || localU?.password || cloudU.password,
+                pin: resolvedPin || localU?.pin || cloudU.pin || "8888",
+                role: cloudU.role || localU?.role || "cashier",
+                name: cloudU.name || localU?.name || cleanUser,
+              };
+            })
+          : (baseLocalDb?.users || []);
 
-                return {
-                  ...localU,
-                  ...cloudU,
-                  id: cloudU.id || localU?.id,
-                  username: cleanUser,
-                  password: resolvedPass || localU?.password || cloudU.password,
-                  pin: resolvedPin || localU?.pin || cloudU.pin || "8888",
-                  role: cloudU.role || localU?.role || "cashier",
-                  name: cloudU.name || localU?.name || cleanUser,
-                };
-              })
-            : (baseLocalDb.users || []);
-
-          // Append any local users not present in cloud
-          for (const remainingLocalU of localUsersByUsername.values()) {
-            mergedUsers.push(remainingLocalU);
-          }
-
-          // Non-destructive merge for audit logs on launch
-          const cloudLogIds = new Set((cloudDb.auditLog || []).map(a => a.id));
-          const pendingLocalLogs = (baseLocalDb.auditLog || []).filter(a => a.id && !cloudLogIds.has(a.id));
-          const mergedAuditLogs = [...pendingLocalLogs, ...(cloudDb.auditLog || [])];
-          mergedAuditLogs.sort((a, b) => (b.time || "").localeCompare(a.time || ""));
-
-          targetDb = {
-            ...cloudDb,
-            users: mergedUsers,
-            auditLog: mergedAuditLogs,
-            settings: {
-              ...(baseLocalDb.settings || {}),
-              ...(cloudDb.settings || {}),
-            },
-          };
+        for (const remainingLocalU of localUsersByUsername.values()) {
+          mergedUsers.push(remainingLocalU);
         }
+
+        // Non-destructive table merges: if cloud table is empty, PRESERVE local catalog & transactions!
+        const mergedProducts = (cloudDb?.products && cloudDb.products.length > 0)
+          ? cloudDb.products
+          : (baseLocalDb?.products || []);
+
+        const mergedCustomers = (cloudDb?.customers && cloudDb.customers.length > 0)
+          ? cloudDb.customers
+          : (baseLocalDb?.customers || []);
+
+        const mergedSuppliers = (cloudDb?.suppliers && cloudDb.suppliers.length > 0)
+          ? cloudDb.suppliers
+          : (baseLocalDb?.suppliers || []);
+
+        const mergedPurchases = (cloudDb?.purchases && cloudDb.purchases.length > 0)
+          ? cloudDb.purchases
+          : (baseLocalDb?.purchases || []);
+
+        const mergedQuotations = (cloudDb?.quotations && cloudDb.quotations.length > 0)
+          ? cloudDb.quotations
+          : (baseLocalDb?.quotations || []);
+
+        // For sales and expenses, union by id
+        const cloudSaleIds = new Set((cloudDb?.sales || []).map(s => s.id || s.invoiceNo));
+        const pendingLocalSales = (baseLocalDb?.sales || []).filter(s => !cloudSaleIds.has(s.id) && !cloudSaleIds.has(s.invoiceNo));
+        const mergedSales = [...(cloudDb?.sales || []), ...pendingLocalSales];
+
+        const cloudExpIds = new Set((cloudDb?.expenses || []).map(e => e.id));
+        const pendingLocalExp = (baseLocalDb?.expenses || []).filter(e => !cloudExpIds.has(e.id));
+        const mergedExpenses = [...(cloudDb?.expenses || []), ...pendingLocalExp];
+
+        // For audit log, union by id
+        const cloudLogIds = new Set((cloudDb?.auditLog || []).map(a => a.id));
+        const pendingLocalLogs = (baseLocalDb?.auditLog || []).filter(a => a.id && !cloudLogIds.has(a.id));
+        const mergedAuditLogs = [...pendingLocalLogs, ...(cloudDb?.auditLog || [])];
+        mergedAuditLogs.sort((a, b) => (b.time || "").localeCompare(a.time || ""));
+
+        let targetDb = {
+          ...baseLocalDb,
+          ...(cloudDb || {}),
+          users: mergedUsers,
+          suppliers: mergedSuppliers,
+          customers: mergedCustomers,
+          products: mergedProducts,
+          purchases: mergedPurchases,
+          sales: mergedSales,
+          expenses: mergedExpenses,
+          quotations: mergedQuotations,
+          auditLog: mergedAuditLogs,
+          settings: {
+            ...(baseLocalDb?.settings || {}),
+            ...(cloudDb?.settings || {}),
+          },
+        };
 
         // Cryptographic password migration: convert any remaining plaintext passwords/pins to PBKDF2
         let needsMigration = false;
@@ -782,7 +807,7 @@ function useDB() {
         setDb(targetDb);
         localStorage.setItem(STORAGE_KEY, JSON.stringify(targetDb));
 
-        // Push state to ensure Supabase tables (audit_log, purchases, sales, etc.) are fully synchronized
+        // Push state to ensure Supabase tables (products, audit_log, purchases, sales, etc.) are fully populated
         autoSyncDatabase(targetDb, 100);
       } catch (err) {
         console.warn("[HardwareFlow] Initial Supabase cloud fetch notice:", err.message || err);
@@ -871,16 +896,17 @@ function useDB() {
             const pendingLocalExpenses = (prevLocal.expenses || []).filter(e => e.offline === true && !cloudExpIds.has(e.id));
 
             const merged = {
+              ...prevLocal,
               ...cloudDb,
               users: mergedUsers,
-              products: cloudDb.products || [],
-              customers: cloudDb.customers || [],
-              suppliers: cloudDb.suppliers || [],
-              purchases: cloudDb.purchases || [],
-              quotations: cloudDb.quotations || [],
+              products: (cloudDb.products && cloudDb.products.length > 0) ? cloudDb.products : (prevLocal.products || []),
+              customers: (cloudDb.customers && cloudDb.customers.length > 0) ? cloudDb.customers : (prevLocal.customers || []),
+              suppliers: (cloudDb.suppliers && cloudDb.suppliers.length > 0) ? cloudDb.suppliers : (prevLocal.suppliers || []),
+              purchases: (cloudDb.purchases && cloudDb.purchases.length > 0) ? cloudDb.purchases : (prevLocal.purchases || []),
+              quotations: (cloudDb.quotations && cloudDb.quotations.length > 0) ? cloudDb.quotations : (prevLocal.quotations || []),
               sales: [...pendingLocalSales, ...(cloudDb.sales || [])],
               expenses: [...pendingLocalExpenses, ...(cloudDb.expenses || [])],
-              auditLog: cloudDb.auditLog || prevLocal.auditLog || [],
+              auditLog: (cloudDb.auditLog && cloudDb.auditLog.length > 0) ? cloudDb.auditLog : (prevLocal.auditLog || []),
               invoiceSeq: Math.max(cloudDb.invoiceSeq || 0, prevLocal.invoiceSeq || 0),
               quoteSeq: Math.max(cloudDb.quoteSeq || 0, prevLocal.quoteSeq || 0),
               poSeq: Math.max(cloudDb.poSeq || 0, prevLocal.poSeq || 0),
