@@ -782,9 +782,10 @@ function useDB() {
         setDb(targetDb);
         localStorage.setItem(STORAGE_KEY, JSON.stringify(targetDb));
 
-        // Push any local upgrades to Supabase in real-time
-        if (!hasCloudData || needsMigration) {
-          autoSyncDatabase(targetDb, 0);
+        // Push any local data or audit logs to Supabase if remote tables are empty
+        const isAuditEmpty = !cloudDb?.auditLog || cloudDb.auditLog.length === 0;
+        if (!hasCloudData || needsMigration || isAuditEmpty) {
+          autoSyncDatabase(targetDb, 100);
         }
       } catch (err) {
         console.warn("[HardwareFlow] Initial Supabase cloud fetch notice:", err.message || err);
@@ -801,9 +802,9 @@ function useDB() {
     } catch (error) {
       console.error("Failed to save HardwareFlow data to localStorage:", error);
     }
-    // Push immediately to Supabase in real-time only after initial cloud resolution
+    // Push immediately to Supabase in real-time with smart debounce to protect Free Tier quotas
     if (isCloudInitialized.current) {
-      autoSyncDatabase(db, 50);
+      autoSyncDatabase(db, 300);
     }
   }, [db]);
 
