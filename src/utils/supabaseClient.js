@@ -129,6 +129,8 @@ export async function pushDatabaseToSupabase(db) {
   const validSupplierIds = new Set((db.suppliers || []).map(s => s.id));
   const validCustomerIds = new Set((db.customers || []).map(c => c.id));
 
+  const syncErrors = [];
+
   // PHASE 1: Push Core Parent Tables First (Users, Suppliers, Customers)
   const phase1Tasks = [];
 
@@ -138,7 +140,8 @@ export async function pushDatabaseToSupabase(db) {
       try {
         let remoteUsers = [];
         try {
-          const { data } = await supabase.from("users").select("id, username");
+          const { data, error: qErr } = await supabase.from("users").select("id, username");
+          if (qErr) syncErrors.push(`Users Query: ${qErr.message}`);
           if (data) remoteUsers = data;
         } catch (err) {
           console.warn("[Supabase Sync] User query notice:", err);
@@ -165,13 +168,14 @@ export async function pushDatabaseToSupabase(db) {
         const { error } = await supabase.from("users").upsert(userPayloads, { onConflict: "id" });
         if (error) {
           console.warn("[Supabase Sync] Users upsert notice, falling back to individual updates:", error.message);
+          syncErrors.push(`Users Upsert: ${error.message}`);
           for (const u of userPayloads) {
-            await supabase.from("users").upsert(u, { onConflict: "id" }).catch(console.warn);
+            await supabase.from("users").upsert(u, { onConflict: "id" }).catch(e => syncErrors.push(`User ${u.username}: ${e.message}`));
           }
         }
         results.users = db.users.length;
       } catch (userTaskErr) {
-        console.warn("[Supabase Sync] Users sync error:", userTaskErr);
+        syncErrors.push(`Users: ${userTaskErr.message || userTaskErr}`);
       }
     })());
   }
@@ -188,10 +192,13 @@ export async function pushDatabaseToSupabase(db) {
           payments: Array.isArray(s.payments) ? s.payments.filter(p => Number(p.amount) > 0) : [],
         }));
         const { error } = await supabase.from("suppliers").upsert(supplierPayload, { onConflict: "id" });
-        if (error) console.warn("[Supabase Sync] Suppliers notice:", error.message);
+        if (error) {
+          console.warn("[Supabase Sync] Suppliers notice:", error.message);
+          syncErrors.push(`Suppliers: ${error.message}`);
+        }
         results.suppliers = db.suppliers.length;
       } catch (cleanErr) {
-        console.warn("[Supabase Sync] Supplier cleanup notice:", cleanErr);
+        syncErrors.push(`Suppliers: ${cleanErr.message || cleanErr}`);
       }
     })());
   }
@@ -208,10 +215,13 @@ export async function pushDatabaseToSupabase(db) {
           payments: Array.isArray(c.payments) ? c.payments.filter(p => Number(p.amount) > 0) : [],
         }));
         const { error } = await supabase.from("customers").upsert(customerPayload, { onConflict: "id" });
-        if (error) console.warn("[Supabase Sync] Customers notice:", error.message);
+        if (error) {
+          console.warn("[Supabase Sync] Customers notice:", error.message);
+          syncErrors.push(`Customers: ${error.message}`);
+        }
         results.customers = db.customers.length;
       } catch (cleanErr) {
-        console.warn("[Supabase Sync] Customer sync notice:", cleanErr);
+        syncErrors.push(`Customers: ${cleanErr.message || cleanErr}`);
       }
     })());
   }
@@ -249,10 +259,11 @@ export async function pushDatabaseToSupabase(db) {
         const { error } = await supabase.from("products").upsert(chunk, { onConflict: "id" });
         if (error) {
           console.warn(`[Supabase Sync] Product chunk ${i}-${i + chunk.length} notice:`, error.message);
+          syncErrors.push(`Products: ${error.message}`);
           // Fallback: push item by item to isolate any single faulty row
           for (const item of chunk) {
             await supabase.from("products").upsert(item, { onConflict: "id" }).catch(e => {
-              console.warn("[Supabase Sync] Single product upsert error:", item.id, e.message);
+              syncErrors.push(`Product ${item.id}: ${e.message}`);
             });
           }
         }
@@ -260,7 +271,7 @@ export async function pushDatabaseToSupabase(db) {
       results.products = sanitizedProducts.length;
       console.log(`[Supabase Sync] Successfully persisted ${sanitizedProducts.length} inventory products to cloud.`);
     } catch (prodErr) {
-      console.error("[Supabase Sync] Products sync error:", prodErr);
+      syncErrors.push(`Products Task: ${prodErr.message || prodErr}`);
     }
   }
 
@@ -287,10 +298,13 @@ export async function pushDatabaseToSupabase(db) {
         }));
 
         const { error } = await supabase.from("sales").upsert(salesPayload, { onConflict: "invoice_no" });
-        if (error) console.warn("[Supabase Sync] Sales notice:", error.message);
+        if (error) {
+          console.warn("[Supabase Sync] Sales notice:", error.message);
+          syncErrors.push(`Sales: ${error.message}`);
+        }
         results.sales = salesPayload.length;
       } catch (err) {
-        console.warn("[Supabase Sync] Sales error:", err.message || err);
+        syncErrors.push(`Sales Task: ${err.message || err}`);
       }
     })());
   }
@@ -310,10 +324,13 @@ export async function pushDatabaseToSupabase(db) {
         }));
 
         const { error } = await supabase.from("expenses").upsert(expensePayload, { onConflict: "id" });
-        if (error) console.warn("[Supabase Sync] Expenses notice:", error.message);
+        if (error) {
+          console.warn("[Supabase Sync] Expenses notice:", error.message);
+          syncErrors.push(`Expenses: ${error.message}`);
+        }
         results.expenses = expensePayload.length;
       } catch (err) {
-        console.warn("[Supabase Sync] Expenses error:", err.message || err);
+        syncErrors.push(`Expenses Task: ${err.message || err}`);
       }
     })());
   }
@@ -331,10 +348,13 @@ export async function pushDatabaseToSupabase(db) {
           items: Array.isArray(q.items) ? q.items : [],
         }));
         const { error } = await supabase.from("quotations").upsert(quotePayload, { onConflict: "number" });
-        if (error) console.warn("[Supabase Sync] Quotations notice:", error.message);
+        if (error) {
+          console.warn("[Supabase Sync] Quotations notice:", error.message);
+          syncErrors.push(`Quotations: ${error.message}`);
+        }
         results.quotations = db.quotations.length;
       } catch (err) {
-        console.warn("[Supabase Sync] Quotations error:", err.message || err);
+        syncErrors.push(`Quotations Task: ${err.message || err}`);
       }
     })());
   }
@@ -357,10 +377,13 @@ export async function pushDatabaseToSupabase(db) {
           notes: p.notes || "",
         }));
         const { error } = await supabase.from("purchases").upsert(purchasePayload, { onConflict: "id" });
-        if (error) console.warn("[Supabase Sync] Purchases notice:", error.message);
+        if (error) {
+          console.warn("[Supabase Sync] Purchases notice:", error.message);
+          syncErrors.push(`Purchases: ${error.message}`);
+        }
         results.purchases = db.purchases.length;
       } catch (err) {
-        console.warn("[Supabase Sync] Purchases error:", err.message || err);
+        syncErrors.push(`Purchases Task: ${err.message || err}`);
       }
     })());
   }
@@ -385,12 +408,15 @@ export async function pushDatabaseToSupabase(db) {
         const { error } = await supabase.from("audit_log").upsert(payload, { onConflict: "id" });
         if (error) {
           console.warn("[Supabase Sync] Audit Log notice, falling back without metadata:", error.message);
+          syncErrors.push(`Audit Log: ${error.message}`);
           const fallback = payload.map(({ metadata, ...rest }) => rest);
-          await supabase.from("audit_log").upsert(fallback, { onConflict: "id" }).catch(console.warn);
+          await supabase.from("audit_log").upsert(fallback, { onConflict: "id" }).catch(e => {
+            syncErrors.push(`Audit Log Fallback: ${e.message}`);
+          });
         }
         results.auditLog = recentLogs.length;
       } catch (err) {
-        console.warn("[Supabase Sync] Audit Log task error:", err.message || err);
+        syncErrors.push(`Audit Log Task: ${err.message || err}`);
       }
     })());
   }
@@ -417,10 +443,17 @@ export async function pushDatabaseToSupabase(db) {
         }
       ],
       { onConflict: "key" }
-    ).catch(err => console.warn("[Supabase Sync] Settings notice:", err.message || err))
+    ).catch(err => {
+      syncErrors.push(`Settings: ${err.message || err}`);
+    })
   );
 
   await Promise.all(phase3Tasks);
+
+  if (syncErrors.length > 0) {
+    throw new Error(syncErrors.join(" | "));
+  }
+
   return results;
 }
 
