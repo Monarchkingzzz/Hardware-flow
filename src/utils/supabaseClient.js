@@ -3,7 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 const SUPABASE_CONFIG_KEY = "hardwareflow-supabase-config";
 
 const DEFAULT_SUPABASE_URL = "https://ivoetfcryfaherjczzpl.supabase.co";
-const DEFAULT_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImluZGt2bGxxd21jY3dwZHdmeG52Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcxMjEwODYsImV4cCI6MjEwMjY5NzA4Nn0.JlizG02YVBCLpH8-DOwInykCkDfSvGgkZaR4mTg-VLg";
+const DEFAULT_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml2b2V0ZmNyeWZhaGVyamN6enBsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc3MzA3NDAsImV4cCI6MjEwMzMwNjc0MH0.KScFPCFdds0Te8och92n3dtlHkycIe-kiZXpRXosQ4g";
 
 export function getSupabaseCredentials() {
   const envUrl = typeof import.meta !== "undefined" && import.meta.env ? import.meta.env.VITE_SUPABASE_URL : null;
