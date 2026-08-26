@@ -28,13 +28,7 @@ import { LoginScreen, ForgotPasswordModal, ProfileModal, UserManagementModal } f
 import {
   autoSyncDatabase,
   pullDatabaseFromSupabase,
-  subscribeToSupabaseRealtime,
-  getIsSyncing,
-  getSupabaseCredentials,
-  saveSupabaseCredentials,
-  clearSupabaseCredentials,
-  testSupabaseConnection,
-  pushDatabaseToSupabase
+  subscribeToSupabaseRealtime
 } from "./utils/supabaseClient";
 import { hashPassword, sanitizeUserForSession, verifyActionPin, validateCustomerDebtRepayment, validateSupplierPayment } from "./utils/security";
 import { useOnlineStatus, enqueueOfflineSale, syncOfflineQueue } from "./utils/offlineSync";
@@ -10937,163 +10931,6 @@ function Alerts({ db, setDb, notify, role, onRestock, onNavigate }) {
   );
 }
 
-/* ================= SUPABASE CLOUD SYNC MODAL ================= */
-function SupabaseSettingsModal({ isOpen, onClose, db, notify }) {
-  const currentCreds = getSupabaseCredentials();
-  const [url, setUrl] = useState(currentCreds.url || "https://ivoetfcryfaherjczzpl.supabase.co");
-  const [anonKey, setAnonKey] = useState(currentCreds.key || "");
-  const [isTesting, setIsTesting] = useState(false);
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [testResult, setTestResult] = useState(null);
-  const [showKey, setShowKey] = useState(false);
-
-  useEffect(() => {
-    if (isOpen) {
-      const c = getSupabaseCredentials();
-      setUrl(c.url || "https://ivoetfcryfaherjczzpl.supabase.co");
-      setAnonKey(c.key || "");
-      setTestResult(null);
-    }
-  }, [isOpen]);
-
-  if (!isOpen) return null;
-
-  async function handleTest() {
-    setIsTesting(true);
-    setTestResult(null);
-    try {
-      const res = await testSupabaseConnection(url, anonKey);
-      setTestResult(res);
-      if (res.success) {
-        notify("success", "Supabase Connected", "Connection to project verified successfully!");
-      } else {
-        notify("error", "Connection Failed", res.error || "Could not connect to Supabase.");
-      }
-    } catch (err) {
-      setTestResult({ success: false, error: err.message || String(err) });
-    } finally {
-      setIsTesting(false);
-    }
-  }
-
-  async function handleSaveAndSync() {
-    if (!url.trim()) {
-      notify("error", "URL Required", "Please enter your Supabase Project URL.");
-      return;
-    }
-    if (!anonKey.trim()) {
-      notify("error", "Anon Key Required", "Please enter your Supabase Anon API Key.");
-      return;
-    }
-    saveSupabaseCredentials(url.trim(), anonKey.trim());
-    setIsSyncing(true);
-    try {
-      await pushDatabaseToSupabase(db);
-      notify("success", "Cloud Database Synced", `All data has been pushed to Supabase project ${url}!`);
-      onClose();
-    } catch (err) {
-      notify("error", "Sync Error", err.message || "Failed to push database to Supabase.");
-    } finally {
-      setIsSyncing(false);
-    }
-  }
-
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(10,12,16,0.75)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 15000, padding: 16 }} onClick={onClose}>
-      <div className="hf-card hf-modal-card" style={{ width: 560, maxWidth: "95vw", padding: 24 }} onClick={e => e.stopPropagation()}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <Database size={22} color="var(--rust)" />
-            <div className="disp" style={{ fontSize: 20, fontWeight: 700 }}>Supabase Cloud Connection</div>
-          </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)" }}><X size={18} /></button>
-        </div>
-
-        <p style={{ fontSize: 13, color: "var(--ink-soft)", marginBottom: 16, lineHeight: 1.4 }}>
-          Connect HardwareFlow to your Supabase PostgreSQL project for automatic multi-device real-time sync, cloud backup, and remote ledger persistence.
-        </p>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <div>
-            <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Supabase Project URL</label>
-            <input
-              type="text"
-              className="hf-input"
-              style={{ width: "100%" }}
-              placeholder="https://your-project-ref.supabase.co"
-              value={url}
-              onChange={e => setUrl(e.target.value)}
-            />
-          </div>
-
-          <div>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-              <label style={{ fontSize: 12, fontWeight: 700 }}>Supabase Anon / Public API Key</label>
-              <button
-                type="button"
-                onClick={() => setShowKey(!showKey)}
-                style={{ background: "none", border: "none", color: "var(--rust)", fontSize: 11, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}
-              >
-                {showKey ? <EyeOff size={13} /> : <Eye size={13} />} {showKey ? "Hide" : "Show"}
-              </button>
-            </div>
-            <textarea
-              className="hf-input"
-              rows={3}
-              style={{ width: "100%", fontFamily: "monospace", fontSize: 11.5, resize: "vertical" }}
-              placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-              value={anonKey}
-              onChange={e => setAnonKey(e.target.value)}
-            />
-            <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 4 }}>
-              Find this in your Supabase Dashboard under <b>Project Settings → API → Project API Keys (anon public)</b>.
-            </div>
-          </div>
-
-          {testResult && (
-            <div style={{
-              padding: "10px 12px",
-              borderRadius: 8,
-              fontSize: 12.5,
-              background: testResult.success ? "var(--green-tint, #ecfdf5)" : "var(--red-tint, #fef2f2)",
-              border: `1px solid ${testResult.success ? "var(--green, #10b981)" : "var(--red, #ef4444)"}`,
-              color: testResult.success ? "var(--green, #065f46)" : "var(--red, #991b1b)",
-              display: "flex",
-              alignItems: "center",
-              gap: 8
-            }}>
-              {testResult.success ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
-              <span>{testResult.success ? "Connected to Supabase successfully! Ready to sync." : `Connection Error: ${testResult.error}`}</span>
-            </div>
-          )}
-
-          <div style={{ borderTop: "1px solid var(--line)", paddingTop: 16, display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-            <button
-              type="button"
-              className="hf-btn hf-btn-ghost"
-              onClick={handleTest}
-              disabled={isTesting || !url || !anonKey}
-            >
-              <RefreshCw size={14} className={isTesting ? "hf-spin" : ""} /> {isTesting ? "Testing..." : "Test Connection"}
-            </button>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button type="button" className="hf-btn hf-btn-ghost" onClick={onClose}>Cancel</button>
-              <button
-                type="button"
-                className="hf-btn hf-btn-primary"
-                onClick={handleSaveAndSync}
-                disabled={isSyncing || !url || !anonKey}
-              >
-                <UploadCloud size={15} /> {isSyncing ? "Pushing Data..." : "Save & Sync to Supabase"}
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /* ================= APP SHELL ================= */
 const NAV = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard, roles: ["owner","cashier","storekeeper"] },
@@ -11182,8 +11019,19 @@ export default function App() {
   const [showForgotPass, setShowForgotPass] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const [showUserMgmt, setShowUserMgmt] = useState(false);
-  const [showSupabaseModal, setShowSupabaseModal] = useState(false);
   const [userDropdown, setUserDropdown] = useState(false);
+  const [cloudSyncState, setCloudSyncState] = useState("synced");
+  const isOnline = useOnlineStatus();
+
+  useEffect(() => {
+    function handleSyncEvent(e) {
+      if (e.detail?.status === "syncing") setCloudSyncState("syncing");
+      else if (e.detail?.status === "success") setCloudSyncState("synced");
+      else if (e.detail?.status === "error") setCloudSyncState("error");
+    }
+    window.addEventListener("supabase-sync-status", handleSyncEvent);
+    return () => window.removeEventListener("supabase-sync-status", handleSyncEvent);
+  }, []);
 
   // Active alerts calculation for topbar notification badge
   const outOfStockItems = useMemo(() => {
@@ -11458,6 +11306,44 @@ export default function App() {
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {/* Mobile Cloud Sync Status */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+                padding: "4px 8px",
+                borderRadius: 14,
+                background: !isOnline
+                  ? "rgba(251, 191, 36, 0.2)"
+                  : cloudSyncState === "syncing"
+                    ? "rgba(193, 80, 47, 0.25)"
+                    : "rgba(52, 211, 153, 0.2)",
+                border: `1px solid ${!isOnline ? "#FBBF24" : cloudSyncState === "syncing" ? "#E8977E" : "#34D399"}`,
+                fontSize: 11,
+                fontWeight: 700,
+                color: "#fff",
+              }}
+              title={!isOnline ? "Offline Mode" : cloudSyncState === "syncing" ? "Syncing to cloud..." : "Cloud database synced"}
+            >
+              {!isOnline ? (
+                <>
+                  <WifiOff size={11} color="#FBBF24" />
+                  <span style={{ color: "#FBBF24" }}>Offline</span>
+                </>
+              ) : cloudSyncState === "syncing" ? (
+                <>
+                  <RefreshCw size={10} className="hf-spin" color="#E8977E" />
+                  <span style={{ color: "#E8977E" }}>Syncing</span>
+                </>
+              ) : (
+                <>
+                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#34D399" }} />
+                  <span style={{ color: "#34D399" }}>Synced</span>
+                </>
+              )}
+            </div>
+
             {/* Mobile Notification Bell & Dropdown */}
             <div style={{ position: "relative" }}>
               <button
@@ -11676,20 +11562,12 @@ export default function App() {
                     </div>
 
                     {role === "owner" && (
-                      <>
-                        <div
-                          onClick={() => setShowUserMgmt(true)}
-                          style={{ padding: "8px 12px", fontSize: 13, display: "flex", alignItems: "center", gap: 8, cursor: "pointer", borderRadius: 6, color: "var(--ink)" }}
-                        >
-                          <Users size={15} color="var(--ink-soft)" /> Staff & Accounts
-                        </div>
-                        <div
-                          onClick={() => setShowSupabaseModal(true)}
-                          style={{ padding: "8px 12px", fontSize: 13, display: "flex", alignItems: "center", gap: 8, cursor: "pointer", borderRadius: 6, color: "var(--ink)" }}
-                        >
-                          <Database size={15} color="var(--rust)" /> Supabase Cloud Sync
-                        </div>
-                      </>
+                      <div
+                        onClick={() => setShowUserMgmt(true)}
+                        style={{ padding: "8px 12px", fontSize: 13, display: "flex", alignItems: "center", gap: 8, cursor: "pointer", borderRadius: 6, color: "var(--ink)" }}
+                      >
+                        <Users size={15} color="var(--ink-soft)" /> Staff & Accounts
+                      </div>
                     )}
 
                     {!isInstalled && (
@@ -11734,8 +11612,58 @@ export default function App() {
         }}>
           <div className="disp" style={{ fontWeight: 700, fontSize: 18 }}>{currentNav?.label}</div>
 
-          {/* Top-Right Controls: Alerts Bell, PWA Install, Theme Toggle & User Account Dropdown */}
+          {/* Top-Right Controls: Cloud Sync Status, Alerts Bell, PWA Install, Theme Toggle & User Account Dropdown */}
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            {/* Desktop Cloud Sync Status Badge */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "5px 11px",
+                borderRadius: 20,
+                background: !isOnline
+                  ? "var(--amber-tint)"
+                  : cloudSyncState === "syncing"
+                    ? "var(--rust-tint)"
+                    : "var(--green-tint)",
+                border: `1px solid ${!isOnline ? "var(--amber)" : cloudSyncState === "syncing" ? "var(--rust)" : "var(--green)"}`,
+                color: !isOnline
+                  ? "var(--amber)"
+                  : cloudSyncState === "syncing"
+                    ? "var(--rust)"
+                    : "var(--green)",
+                fontSize: 12,
+                fontWeight: 700,
+                userSelect: "none"
+              }}
+              title={
+                !isOnline
+                  ? "Offline mode active — changes stored locally and will sync when internet returns"
+                  : cloudSyncState === "syncing"
+                    ? "Syncing changes to Supabase cloud database..."
+                    : "Live Supabase Cloud Connected & Synced"
+              }
+            >
+              {!isOnline ? (
+                <>
+                  <WifiOff size={13} />
+                  <span>Offline</span>
+                </>
+              ) : cloudSyncState === "syncing" ? (
+                <>
+                  <RefreshCw size={12} className="hf-spin" />
+                  <span>Syncing...</span>
+                </>
+              ) : (
+                <>
+                  <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--green)", boxShadow: "0 0 6px var(--green)" }} />
+                  <Cloud size={14} />
+                  <span>Synced</span>
+                </>
+              )}
+            </div>
+
             {/* Desktop Notification Bell with Flyout */}
             <div style={{ position: "relative" }}>
               <button
@@ -11956,24 +11884,14 @@ export default function App() {
                     </div>
 
                     {role === "owner" && (
-                      <>
-                        <div
-                          onClick={() => setShowUserMgmt(true)}
-                          style={{ padding: "8px 12px", fontSize: 13, display: "flex", alignItems: "center", gap: 8, cursor: "pointer", borderRadius: 6 }}
-                          onMouseEnter={e => e.currentTarget.style.background = "var(--surface-hover)"}
-                          onMouseLeave={e => e.currentTarget.style.background = "transparent"}
-                        >
-                          <Users size={15} color="var(--ink-soft)" /> Staff & Accounts
-                        </div>
-                        <div
-                          onClick={() => setShowSupabaseModal(true)}
-                          style={{ padding: "8px 12px", fontSize: 13, display: "flex", alignItems: "center", gap: 8, cursor: "pointer", borderRadius: 6 }}
-                          onMouseEnter={e => e.currentTarget.style.background = "var(--surface-hover)"}
-                          onMouseLeave={e => e.currentTarget.style.background = "transparent"}
-                        >
-                          <Database size={15} color="var(--rust)" /> Supabase Cloud Sync
-                        </div>
-                      </>
+                      <div
+                        onClick={() => setShowUserMgmt(true)}
+                        style={{ padding: "8px 12px", fontSize: 13, display: "flex", alignItems: "center", gap: 8, cursor: "pointer", borderRadius: 6 }}
+                        onMouseEnter={e => e.currentTarget.style.background = "var(--surface-hover)"}
+                        onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                      >
+                        <Users size={15} color="var(--ink-soft)" /> Staff & Accounts
+                      </div>
                     )}
 
                     {/* Install PWA Option */}
@@ -12093,15 +12011,6 @@ export default function App() {
           db={db}
           setDb={setDb}
           onClose={() => setShowUserMgmt(false)}
-          notify={notify}
-        />
-      )}
-
-      {showSupabaseModal && (
-        <SupabaseSettingsModal
-          isOpen={showSupabaseModal}
-          onClose={() => setShowSupabaseModal(false)}
-          db={db}
           notify={notify}
         />
       )}

@@ -873,6 +873,10 @@ export function autoSyncDatabase(db, delay = 50) {
     isSyncing = true;
     lastLocalMutationTime = Date.now();
 
+    window.dispatchEvent(new CustomEvent("supabase-sync-status", {
+      detail: { status: "syncing", timestamp: new Date().toISOString() }
+    }));
+
     try {
       await pushDatabaseToSupabase(dbToSync);
       console.log("[Supabase Realtime Sync] Updated cloud database at", new Date().toLocaleTimeString());
