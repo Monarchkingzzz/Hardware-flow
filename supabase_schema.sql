@@ -198,61 +198,14 @@ begin
 end $$;
 
 -- ==============================================================================
--- INITIAL DATA SEEDING (Insert default records if tables are empty)
+-- INITIAL CORE DATA SEEDING (Admin credentials & System Sequences only)
 -- ==============================================================================
 
--- Users
+-- Default Staff Logins
 insert into public.users (id, username, password, name, role, phone, pin) values
   ('u1', 'owner', 'admin123', 'Shop Owner', 'owner', '0722 000 111', '8888'),
   ('u2', 'cashier', 'cashier123', 'John — Cashier', 'cashier', '0722 000 222', '1111'),
   ('u3', 'store', 'store123', 'Mary — Storekeeper', 'storekeeper', '0722 000 333', '2222')
-on conflict (id) do nothing;
-
--- Suppliers
-insert into public.suppliers (id, name, phone, terms, payments) values
-  ('s1', 'Bamburi & ABC Supplies', '0722 100 200', 'Net 30', '[{"date": "2026-08-05", "amount": 50000}]'::jsonb),
-  ('s2', 'Doone Electricals', '0733 400 500', 'Net 14', '[]'::jsonb),
-  ('s3', 'Steel & Nails Co', '0711 800 900', 'Cash on delivery', '[]'::jsonb)
-on conflict (id) do nothing;
-
--- Products (with rich movement history tracking and running balances)
-insert into public.products (id, name, category, brand, sku, description, base_unit, purchase_unit, conversion_factor, buy_price, sell_price, contractor_price, wholesale_price, min_stock, stock, supplier_id, location, history) values
-  ('p1', 'Cement 50kg', 'Cement & Building', 'Bamburi', 'CEM-001', 'Portland all-purpose building cement for masonry & concrete work.', 'bag', 'bag', 1, 650, 780, 750, 730, 20, 263, 's1', 'Main Store', '[
-    {"id": "h1", "date": "2026-08-01", "time": "08:00", "action": "Opening Stock", "ref": "INIT-001", "qty": 200, "balance": 200, "user": "Mary", "reason": "Initial inventory setup"},
-    {"id": "h2", "date": "2026-08-03", "time": "10:14", "action": "Sale", "ref": "INV-2026-00448", "qty": -15, "balance": 185, "user": "John", "reason": "Retail customer sale"},
-    {"id": "h3", "date": "2026-08-05", "time": "11:30", "action": "Receive Stock", "ref": "PO-1001", "qty": 100, "balance": 285, "user": "Mary", "reason": "Stock delivery from Bamburi"},
-    {"id": "h4", "date": "2026-08-06", "time": "14:20", "action": "Sale", "ref": "INV-2026-00450", "qty": -20, "balance": 265, "user": "John", "reason": "Credit sale to ABC Construction"},
-    {"id": "h5", "date": "2026-08-07", "time": "16:45", "action": "Adjustment", "ref": "ADJ-1001", "qty": -2, "balance": 263, "user": "Mary", "reason": "Damage — Torn bags during offloading"}
-  ]'::jsonb),
-  ('p2', 'Electrical Cable 2.5mm', 'Electrical', 'Doone', 'ELEC-010', 'Single core pure copper conduit wiring cable (100m roll).', 'metre', 'roll', 100, 8500, 110, 100, 95, 200, 385, 's2', 'Main Store', '[
-    {"id": "h6", "date": "2026-08-01", "time": "08:00", "action": "Opening Stock", "ref": "INIT-002", "qty": 400, "balance": 400, "user": "Mary", "reason": "Initial stock"},
-    {"id": "h7", "date": "2026-08-10", "time": "14:30", "action": "Sale", "ref": "INV-2026-00449", "qty": -15, "balance": 385, "user": "John", "reason": "Customer sale"}
-  ]'::jsonb),
-  ('p3', 'PVC Pipe 4-inch', 'Plumbing', 'Kenpipe', 'PVC-004', 'Heavy duty underground drainage and waste water PVC pipe (6m length).', 'piece', 'piece', 1, 180, 250, 230, 220, 15, 50, 's1', 'Yard', '[
-    {"id": "h8", "date": "2026-08-01", "time": "08:00", "action": "Opening Stock", "ref": "INIT-003", "qty": 60, "balance": 60, "user": "Mary", "reason": "Initial stock"},
-    {"id": "h9", "date": "2026-08-15", "time": "09:30", "action": "Sale", "ref": "INV-2026-00451", "qty": -10, "balance": 50, "user": "John", "reason": "Cash sale"}
-  ]'::jsonb),
-  ('p4', 'Nails 4-inch', 'Fasteners & Hardware', 'SteelCo', 'NAIL-004', 'Timber construction wire nails for roofing & formwork.', 'kg', 'bag (25kg)', 25, 3000, 150, 145, 135, 50, 67, 's3', 'Store', '[
-    {"id": "h10", "date": "2026-08-01", "time": "08:00", "action": "Opening Stock", "ref": "INIT-004", "qty": 75, "balance": 75, "user": "Mary", "reason": "Initial stock"},
-    {"id": "h11", "date": "2026-08-12", "time": "09:30", "action": "Sale", "ref": "INV-2026-00451", "qty": -8, "balance": 67, "user": "John", "reason": "M-Pesa sale"}
-  ]'::jsonb),
-  ('p5', 'Gloss Paint 4L', 'Paint & Finishes', 'Crown', 'PNT-004', 'Brilliant white super gloss oil paint for wood & metal surfaces.', 'tin', 'carton (12)', 12, 12000, 1450, 1380, 1300, 24, 16, 's2', 'Shop', '[
-    {"id": "h12", "date": "2026-08-01", "time": "08:00", "action": "Opening Stock", "ref": "INIT-005", "qty": 24, "balance": 24, "user": "Mary", "reason": "Initial stock"},
-    {"id": "h13", "date": "2026-08-16", "time": "11:15", "action": "Sale", "ref": "INV-2026-00452", "qty": -8, "balance": 16, "user": "John", "reason": "Credit sale"}
-  ]'::jsonb)
-on conflict (id) do nothing;
-
--- Supplier Purchases
-insert into public.purchases (id, po_number, supplier_id, supplier_name, date, time, items, total, payment, received_by, notes) values
-  ('po1', 'PO-1001', 's1', 'Bamburi & ABC Supplies', '2026-08-02', '10:15', '[{"productId": "p1", "productName": "Cement 50kg", "qty": 130, "unit": "bag", "unitPrice": 650, "lineTotal": 84500}]'::jsonb, 85000, 'credit', 'Mary', 'Bamburi stock delivery'),
-  ('po2', 'PO-1002', 's1', 'Bamburi & ABC Supplies', '2026-08-10', '14:20', '[{"productId": "p1", "productName": "Cement 50kg", "qty": 80, "unit": "bag", "unitPrice": 650, "lineTotal": 52000}, {"productId": "p3", "productName": "PVC Pipe 4-inch", "qty": 44, "unit": "piece", "unitPrice": 180, "lineTotal": 7920}]'::jsonb, 60000, 'credit', 'Mary', 'Building materials delivery')
-on conflict (id) do nothing;
-
--- Customers
-insert into public.customers (id, name, phone, credit_limit, payments) values
-  ('c1', 'ABC Construction Ltd', '0722 555 111', 500000, '[{"date": "2026-08-08", "amount": 100000}, {"date": "2026-08-20", "amount": 25000}]'::jsonb),
-  ('c2', 'John Builders', '0733 555 222', 100000, '[{"date": "2026-08-17", "amount": 20000}]'::jsonb),
-  ('c3', 'XYZ Contractors', '0711 555 333', 150000, '[{"date": "2026-07-11", "amount": 15000}]'::jsonb)
 on conflict (id) do nothing;
 
 -- System Settings & Sequences
