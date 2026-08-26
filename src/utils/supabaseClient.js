@@ -776,7 +776,7 @@ export async function pushUserToSupabase(user) {
   }
 }
 
-export function autoSyncDatabase(db, delay = 300) {
+export function autoSyncDatabase(db, delay = 100) {
   if (!db) return;
   lastLocalMutationTime = Date.now();
   pendingDb = db;

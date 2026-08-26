@@ -827,7 +827,7 @@ function useDB() {
     }
     // Push immediately to Supabase in real-time with smart debounce to protect Free Tier quotas
     if (isCloudInitialized.current) {
-      autoSyncDatabase(db, 300);
+      autoSyncDatabase(db, 100);
     }
   }, [db]);
 
