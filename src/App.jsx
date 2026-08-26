@@ -782,14 +782,12 @@ function useDB() {
         setDb(targetDb);
         localStorage.setItem(STORAGE_KEY, JSON.stringify(targetDb));
 
-        // Push any local data or audit logs to Supabase if remote tables are empty
-        const isAuditEmpty = !cloudDb?.auditLog || cloudDb.auditLog.length === 0;
-        if (!hasCloudData || needsMigration || isAuditEmpty) {
-          autoSyncDatabase(targetDb, 100);
-        }
+        // Push state to ensure Supabase tables (audit_log, purchases, sales, etc.) are fully synchronized
+        autoSyncDatabase(targetDb, 100);
       } catch (err) {
         console.warn("[HardwareFlow] Initial Supabase cloud fetch notice:", err.message || err);
         isCloudInitialized.current = true;
+        autoSyncDatabase(db, 300);
       }
     })();
   }, []);
@@ -1044,11 +1042,13 @@ const GlobalStyle = ({ theme }) => {
       .hf-root {
         display: flex;
         flex-direction: row;
-        width: 100%;
+        width: 100vw;
         max-width: 100%;
-        min-height: 100vh;
+        height: 100vh;
+        height: 100dvh;
+        max-height: 100vh;
         background: var(--bg);
-        overflow-x: hidden;
+        overflow: hidden;
         box-sizing: border-box;
       }
       .hf-sidebar {
@@ -1058,26 +1058,28 @@ const GlobalStyle = ({ theme }) => {
         display: flex;
         flex-direction: column;
         padding: 20px 0;
-        position: sticky;
-        top: 0;
         height: 100vh;
         height: 100dvh;
+        max-height: 100vh;
         overflow-y: auto;
         z-index: 100;
+        box-sizing: border-box;
       }
       .hf-desktop-topbar {
         position: sticky;
         top: 0;
         z-index: 90;
+        flex-shrink: 0;
       }
       .hf-main-wrap {
         flex: 1;
         display: flex;
         flex-direction: column;
         min-width: 0;
-        width: 100%;
-        max-width: 100%;
-        overflow-x: hidden;
+        height: 100vh;
+        height: 100dvh;
+        max-height: 100vh;
+        overflow: hidden;
         box-sizing: border-box;
       }
       .hf-main-content-wrap {
